@@ -1,0 +1,6 @@
+../Core/Src/main.c:36:13:Print	1
+../Core/Src/main.c:39:13:PrintBuf	1
+../Core/Src/main.c:42:13:PrintHex	1
+../Core/Src/main.c:49:5:main	16
+../Core/Src/main.c:187:6:SystemClock_Config	3
+../Core/Src/main.c:212:6:Error_Handler	1

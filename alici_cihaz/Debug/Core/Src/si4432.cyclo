@@ -1,0 +1,9 @@
+../Core/Src/si4432.c:34:6:SI4432_WriteReg	1
+../Core/Src/si4432.c:42:9:SI4432_ReadReg	1
+../Core/Src/si4432.c:55:13:SI4432_ClearIRQ	1
+../Core/Src/si4432.c:63:13:SI4432_ResetRxFIFO	1
+../Core/Src/si4432.c:68:13:SI4432_ResetTxFIFO	1
+../Core/Src/si4432.c:76:6:SI4432_Init	5
+../Core/Src/si4432.c:177:6:SI4432_SendPacket	6
+../Core/Src/si4432.c:224:6:SI4432_StartRx	1
+../Core/Src/si4432.c:249:9:SI4432_CheckRx	7

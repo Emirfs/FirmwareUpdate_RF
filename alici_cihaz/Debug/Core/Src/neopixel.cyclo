@@ -1,0 +1,6 @@
+../Core/Src/neopixel.c:45:13:neopixel_send_byte	3
+../Core/Src/neopixel.c:86:6:NeoPixel_Init	1
+../Core/Src/neopixel.c:102:6:NeoPixel_SetColor	2
+../Core/Src/neopixel.c:111:6:NeoPixel_SetAll	2
+../Core/Src/neopixel.c:116:6:NeoPixel_Clear	1
+../Core/Src/neopixel.c:121:6:NeoPixel_Show	4
