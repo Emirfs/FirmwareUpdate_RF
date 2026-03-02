@@ -60,8 +60,8 @@ all: main-build
 main-build: alıcı_cihaz.elf secondary-outputs
 
 # Tool invocations
-alıcı_cihaz.elf alıcı_cihaz.map: $(OBJS) $(USER_OBJS) C:\Users\Emir\ Furkan\Desktop\FirmwareUpdate\alici_cihaz\STM32F030CCTX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "alıcı_cihaz.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m0 -T"C:\Users\Emir Furkan\Desktop\FirmwareUpdate\alici_cihaz\STM32F030CCTX_FLASH.ld" --specs=nosys.specs -Wl,-Map="alıcı_cihaz.map" -Wl,--gc-sections -static --specs=nano.specs -mfloat-abi=soft -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+alıcı_cihaz.elf alıcı_cihaz.map: $(OBJS) $(USER_OBJS) C:\Users\Emir\ Furkan\Desktop\FirmwareUpdate_RF\alici_cihaz\STM32F030CCTX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-gcc -o "alıcı_cihaz.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m0 -T"C:\Users\Emir Furkan\Desktop\FirmwareUpdate_RF\alici_cihaz\STM32F030CCTX_FLASH.ld" --specs=nosys.specs -Wl,-Map="alıcı_cihaz.map" -Wl,--gc-sections -static --specs=nano.specs -mfloat-abi=soft -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 

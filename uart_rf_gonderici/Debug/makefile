@@ -60,8 +60,8 @@ all: main-build
 main-build: uart_rf_gonderici.elf secondary-outputs
 
 # Tool invocations
-uart_rf_gonderici.elf uart_rf_gonderici.map: $(OBJS) $(USER_OBJS) C:\Users\Emir\ Furkan\Desktop\FirmwareUpdate\uart_rf_gonderici\STM32F030C8TX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "uart_rf_gonderici.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m0 -T"C:\Users\Emir Furkan\Desktop\FirmwareUpdate\uart_rf_gonderici\STM32F030C8TX_FLASH.ld" --specs=nosys.specs -Wl,-Map="uart_rf_gonderici.map" -Wl,--gc-sections -static --specs=nano.specs -mfloat-abi=soft -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+uart_rf_gonderici.elf uart_rf_gonderici.map: $(OBJS) $(USER_OBJS) C:\Users\Emir\ Furkan\Desktop\FirmwareUpdate_RF\uart_rf_gonderici\STM32F030C8TX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-gcc -o "uart_rf_gonderici.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m0 -T"C:\Users\Emir Furkan\Desktop\FirmwareUpdate_RF\uart_rf_gonderici\STM32F030C8TX_FLASH.ld" --specs=nosys.specs -Wl,-Map="uart_rf_gonderici.map" -Wl,--gc-sections -static --specs=nano.specs -mfloat-abi=soft -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 
