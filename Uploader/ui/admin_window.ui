@@ -1,0 +1,410 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>AdminWindow</class>
+ <widget class="QMainWindow" name="AdminWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1050</width>
+    <height>700</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Admin Paneli</string>
+  </property>
+  <widget class="QWidget" name="centralwidget">
+   <layout class="QVBoxLayout" name="rootLayout">
+    <property name="spacing">
+     <number>12</number>
+    </property>
+    <property name="leftMargin">
+     <number>16</number>
+    </property>
+    <property name="topMargin">
+     <number>16</number>
+    </property>
+    <property name="rightMargin">
+     <number>16</number>
+    </property>
+    <property name="bottomMargin">
+     <number>16</number>
+    </property>
+    <item>
+     <layout class="QHBoxLayout" name="headerLayout">
+      <item>
+       <widget class="QLabel" name="adminHeaderLabel">
+        <property name="text">
+         <string>Admin Kontrol Merkezi</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <spacer name="headerSpacer">
+        <property name="orientation">
+         <enum>Qt::Horizontal</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>40</width>
+          <height>20</height>
+         </size>
+        </property>
+       </spacer>
+      </item>
+      <item>
+       <widget class="QPushButton" name="closeAdminButton">
+        <property name="text">
+         <string>Kapat</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </item>
+    <item>
+     <widget class="QLabel" name="adminInfoLabel">
+      <property name="text">
+       <string>Cihazlar, sistem ayarlari ve guvenlik islemleri</string>
+      </property>
+     </widget>
+    </item>
+    <item>
+     <widget class="QTabWidget" name="adminTabs">
+      <property name="currentIndex">
+       <number>0</number>
+      </property>
+      <widget class="QWidget" name="devicesTab">
+       <attribute name="title">
+        <string>Cihazlar</string>
+       </attribute>
+       <layout class="QHBoxLayout" name="devicesRootLayout">
+        <property name="spacing">
+         <number>12</number>
+        </property>
+        <item>
+         <widget class="QGroupBox" name="devicesListGroup">
+          <property name="title">
+           <string>Cihaz Listesi</string>
+          </property>
+          <layout class="QVBoxLayout" name="devicesListLayout">
+           <item>
+            <widget class="QLineEdit" name="deviceSearchEdit">
+             <property name="placeholderText">
+              <string>Cihaz ara...</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QListWidget" name="deviceListWidget"/>
+           </item>
+           <item>
+            <widget class="QLabel" name="deviceCountLabel">
+             <property name="text">
+              <string>0 cihaz</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <layout class="QHBoxLayout" name="deviceButtonsLayout">
+             <item>
+              <widget class="QPushButton" name="addDeviceButton">
+               <property name="text">
+                <string>Yeni</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="editDeviceButton">
+               <property name="text">
+                <string>Duzenle</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="deleteDeviceButton">
+               <property name="text">
+                <string>Sil</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QGroupBox" name="deviceMetaGroup">
+          <property name="title">
+           <string>Secili Cihaz Ozet</string>
+          </property>
+          <layout class="QVBoxLayout" name="deviceMetaLayout">
+           <item>
+            <layout class="QGridLayout" name="deviceMetaGrid">
+             <item row="0" column="0">
+              <widget class="QLabel" name="metaNameTitle">
+               <property name="text">
+                <string>Cihaz:</string>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="1">
+              <widget class="QLabel" name="metaNameValue">
+               <property name="text">
+                <string>-</string>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="0">
+              <widget class="QLabel" name="metaFwTitle">
+               <property name="text">
+                <string>Firmware:</string>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="1">
+              <widget class="QLabel" name="metaFwValue">
+               <property name="text">
+                <string>-</string>
+               </property>
+              </widget>
+             </item>
+             <item row="2" column="0">
+              <widget class="QLabel" name="metaLastTitle">
+               <property name="text">
+                <string>Yuklu:</string>
+               </property>
+              </widget>
+             </item>
+             <item row="2" column="1">
+              <widget class="QLabel" name="metaLastValue">
+               <property name="text">
+                <string>-</string>
+               </property>
+              </widget>
+             </item>
+             <item row="3" column="0">
+              <widget class="QLabel" name="metaDriveTitle">
+               <property name="text">
+                <string>Drive ID:</string>
+               </property>
+              </widget>
+             </item>
+             <item row="3" column="1">
+              <widget class="QLabel" name="metaDriveValue">
+               <property name="text">
+                <string>-</string>
+               </property>
+              </widget>
+             </item>
+             <item row="4" column="0">
+              <widget class="QLabel" name="metaAesTitle">
+               <property name="text">
+                <string>AES:</string>
+               </property>
+              </widget>
+             </item>
+             <item row="4" column="1">
+              <layout class="QHBoxLayout" name="aesRowLayout">
+               <item>
+                <widget class="QLabel" name="metaAesValue">
+                 <property name="text">
+                  <string>********</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QPushButton" name="toggleAesButton">
+                 <property name="text">
+                  <string>Goz</string>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </item>
+            </layout>
+           </item>
+           <item>
+            <spacer name="deviceMetaSpacer">
+             <property name="orientation">
+              <enum>Qt::Vertical</enum>
+             </property>
+             <property name="sizeHint" stdset="0">
+              <size>
+               <width>20</width>
+               <height>40</height>
+              </size>
+             </property>
+            </spacer>
+           </item>
+           <item>
+            <widget class="QPushButton" name="updateStm32KeyButton">
+             <property name="text">
+              <string>STM32 Key Guncelle</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="settingsTab">
+       <attribute name="title">
+        <string>Ayarlar</string>
+       </attribute>
+       <layout class="QVBoxLayout" name="settingsRootLayout">
+        <item>
+         <widget class="QGroupBox" name="adminSettingsGroupBox">
+          <property name="title">
+           <string>Baglanti ve Paket Ayarlari</string>
+          </property>
+          <layout class="QGridLayout" name="adminSettingsGrid">
+           <item row="0" column="0">
+            <widget class="QLabel" name="baudLabel">
+             <property name="text">
+              <string>Baud Rate:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="1">
+            <widget class="QLineEdit" name="baudEdit"/>
+           </item>
+           <item row="0" column="2">
+            <widget class="QLabel" name="retryLabel">
+             <property name="text">
+              <string>Max Retry:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="3">
+            <widget class="QLineEdit" name="retryEdit"/>
+           </item>
+           <item row="1" column="0">
+            <widget class="QLabel" name="packetLabel">
+             <property name="text">
+              <string>Paket Boyutu:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="1">
+            <widget class="QLineEdit" name="packetEdit"/>
+           </item>
+           <item row="1" column="2">
+            <widget class="QLabel" name="defaultPortLabel">
+             <property name="text">
+              <string>Varsayilan Port:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="3">
+            <widget class="QLineEdit" name="defaultPortEdit"/>
+           </item>
+           <item row="2" column="0">
+            <widget class="QLabel" name="serviceJsonLabel">
+             <property name="text">
+              <string>Service Account JSON:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="1" colspan="3">
+            <widget class="QLineEdit" name="serviceJsonEdit"/>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <layout class="QHBoxLayout" name="saveRowLayout">
+          <item>
+           <spacer name="saveRowSpacer">
+            <property name="orientation">
+             <enum>Qt::Horizontal</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>40</width>
+              <height>20</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+          <item>
+           <widget class="QPushButton" name="saveAllButton">
+            <property name="text">
+             <string>Tum Ayarlari Kaydet</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="securityTab">
+       <attribute name="title">
+        <string>Guvenlik</string>
+       </attribute>
+       <layout class="QVBoxLayout" name="securityRootLayout">
+        <item>
+         <widget class="QGroupBox" name="securityGroupBox">
+          <property name="title">
+           <string>Yetki ve Sistem</string>
+          </property>
+          <layout class="QVBoxLayout" name="securityButtonsLayout">
+           <item>
+            <widget class="QPushButton" name="changePasswordButton">
+             <property name="text">
+              <string>Sifre Degistir</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="resetConfigButton">
+             <property name="text">
+              <string>Config Sifirla</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="securityHintLabel">
+             <property name="text">
+              <string>Not: Config sifirlama isleminde admin bilgileri korunur.</string>
+             </property>
+             <property name="wordWrap">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <spacer name="securitySpacer">
+          <property name="orientation">
+           <enum>Qt::Vertical</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>20</width>
+            <height>40</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </widget>
+     </widget>
+    </item>
+    <item>
+     <widget class="QLabel" name="adminStatusLabel">
+      <property name="text">
+       <string>Hazir</string>
+      </property>
+     </widget>
+    </item>
+   </layout>
+  </widget>
+  <widget class="QMenuBar" name="menubar"/>
+  <widget class="QStatusBar" name="statusbar"/>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

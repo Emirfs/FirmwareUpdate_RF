@@ -31,7 +31,12 @@ class DriveManager:
                 except Exception as e:
                     self.api_error = str(e)
             else:
-                self.api_error = "Google API kütüphaneleri eksik (pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib)"
+                self.api_error = (
+                    "Google API kutuphaneleri eksik. "
+                    "pip install -r requirements.txt "
+                    "veya "
+                    "pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib"
+                )
 
     def check_file_version(self, file_id):
         """

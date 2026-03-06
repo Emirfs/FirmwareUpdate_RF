@@ -44,6 +44,37 @@
 #define VERSION_ADDRESS (BOOT_FLAG_ADDRESS + 8)
 
 // =========================================================================
+// Resume (Kaldığı Yerden Devam) Sabitleri
+// =========================================================================
+//
+// Boot flag sayfasının (0x0803F800) kullanılmayan alanına yazılır:
+//   +0  [4 byte] : BOOT_FLAG_MAGIC
+//   +4  [4 byte] : BOOT_FLAG_REQUEST
+//   +8  [4 byte] : VERSION
+//   +12 [4 byte] : RESUME_MAGIC  ← resume durumu geçerli mi?
+//   +16 [4 byte] : Toplam paket sayısı
+//   +20 [222 byte]: Sayfa bitti bitmap (111 halfword, her biri 0x0000 = tamam)
+//
+// Nasıl çalışır:
+//   - Her sayfa (16 paket = 2KB) tamamlandığında, o sayfanın bitmap girişi
+//     0xFFFF → 0x0000 yazılır (Flash 1→0 yazımı, silmeden yapılabilir).
+//   - Cihaz resetlenince bootloader resume_start_packet'i okur ve
+//     BOOT_ACK payload'ında gönderici'ye bildirir.
+//   - Gönderici başa döndüğünde ilk N paketi RF'e iletmeden geçer (UART'tan
+//     okur, PC'ye ACK verir, RF'e göndermez).
+// =========================================================================
+
+// Her firmware paketinin boyutu 128 byte; Flash sayfa boyutu 2048 byte
+// → her sayfada 16 firmware paketi bulunur
+#define PACKETS_PER_PAGE (FLASH_PAGE_SIZE / FW_PACKET_SIZE) // 16
+
+// Resume durumu kayıt adresleri (boot flag sayfasında)
+#define RESUME_MAGIC            0x12345678        // Resume verisi geçerli
+#define RESUME_STATE_ADDRESS    (BOOT_FLAG_ADDRESS + 12) // Magic (4 byte)
+#define RESUME_TOTAL_OFFSET     (BOOT_FLAG_ADDRESS + 16) // Toplam paket (4 byte)
+#define RESUME_PAGE_MAP_ADDRESS (BOOT_FLAG_ADDRESS + 20) // Bitmap (111 x 2 byte)
+
+// =========================================================================
 // AES-256 Ayarları
 // =========================================================================
 

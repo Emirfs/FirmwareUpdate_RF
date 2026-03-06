@@ -1,0 +1,14 @@
+../Core/Src/boot_storage.c:46:10:Calculate_CRC32	4
+../Core/Src/boot_storage.c:75:10:Calculate_Flash_CRC32	5
+../Core/Src/boot_storage.c:104:9:check_boot_flag	3
+../Core/Src/boot_storage.c:118:6:set_boot_flag	1
+../Core/Src/boot_storage.c:151:6:clear_boot_flag	1
+../Core/Src/boot_storage.c:177:6:Flash_Erase_Application	2
+../Core/Src/boot_storage.c:205:6:Flash_Erase_Page	1
+../Core/Src/boot_storage.c:232:6:Resume_Init	1
+../Core/Src/boot_storage.c:261:6:Resume_SavePageDone	1
+../Core/Src/boot_storage.c:279:10:Resume_GetStartPacket	4
+../Core/Src/boot_storage.c:312:6:Flash_Write_Data	3
+../Core/Src/boot_storage.c:340:9:Flash_Verify_Data	3
+../Core/Src/boot_storage.c:357:10:Flash_Read_Version	1
+../Core/Src/boot_storage.c:368:6:Flash_Write_Version	1

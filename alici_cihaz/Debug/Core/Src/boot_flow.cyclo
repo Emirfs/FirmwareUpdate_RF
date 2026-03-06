@@ -1,0 +1,2 @@
+../Core/Src/boot_flow.c:98:6:jump_to_application	4
+../Core/Src/boot_flow.c:164:6:Bootloader_Main	33

@@ -32,8 +32,11 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
  ../Drivers/STM32F0xx_HAL_Driver/Inc/stm32f0xx_hal_uart.h \
  ../Drivers/STM32F0xx_HAL_Driver/Inc/stm32f0xx_hal_uart_ex.h \
  ../Core/Inc/dma.h ../Core/Inc/main.h ../Core/Inc/gpio.h \
- ../Core/Inc/iwdg.h ../Core/Inc/spi.h ../Core/Inc/tim.h \
- ../Core/Inc/usart.h ../Core/Inc/rf_protocol.h ../Core/Inc/si4432.h
+ ../Core/Inc/iwdg.h ../Core/Inc/spi.h ../Core/Inc/sender_fw_update.h \
+ ../Core/Inc/sender_normal_mode.h ../Core/Inc/sender_state.h \
+ ../Core/Inc/rf_protocol.h ../Core/Inc/sender_uart_debug.h \
+ ../Core/Inc/tim.h ../Core/Inc/usart.h ../Core/Inc/rf_protocol.h \
+ ../Core/Inc/si4432.h
 ../Core/Inc/main.h:
 ../Drivers/STM32F0xx_HAL_Driver/Inc/stm32f0xx_hal.h:
 ../Core/Inc/stm32f0xx_hal_conf.h:
@@ -72,6 +75,11 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
 ../Core/Inc/gpio.h:
 ../Core/Inc/iwdg.h:
 ../Core/Inc/spi.h:
+../Core/Inc/sender_fw_update.h:
+../Core/Inc/sender_normal_mode.h:
+../Core/Inc/sender_state.h:
+../Core/Inc/rf_protocol.h:
+../Core/Inc/sender_uart_debug.h:
 ../Core/Inc/tim.h:
 ../Core/Inc/usart.h:
 ../Core/Inc/rf_protocol.h:

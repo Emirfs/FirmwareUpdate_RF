@@ -1,0 +1,4 @@
+../Core/Src/sender_uart_debug.c:34:6:SenderDebug_SetEnabled	16	static
+../Core/Src/sender_uart_debug.c:37:6:Print	16	static
+../Core/Src/sender_uart_debug.c:46:6:PrintHex	48	static
+../Core/Src/sender_uart_debug.c:57:6:PrintBuf	24	static

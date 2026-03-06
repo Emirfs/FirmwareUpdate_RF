@@ -1,0 +1,509 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MainWindow</class>
+ <widget class="QMainWindow" name="MainWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1260</width>
+    <height>820</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Smart Home Firmware Updater - Wizard</string>
+  </property>
+  <widget class="QWidget" name="centralwidget">
+   <layout class="QVBoxLayout" name="rootLayout">
+    <property name="spacing">
+     <number>12</number>
+    </property>
+    <property name="leftMargin">
+     <number>18</number>
+    </property>
+    <property name="topMargin">
+     <number>18</number>
+    </property>
+    <property name="rightMargin">
+     <number>18</number>
+    </property>
+    <property name="bottomMargin">
+     <number>18</number>
+    </property>
+    <item>
+     <layout class="QHBoxLayout" name="headerLayout">
+      <item>
+       <widget class="QLabel" name="headerLabel">
+        <property name="text">
+         <string>Smart Home Firmware Updater</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <spacer name="headerSpacer">
+        <property name="orientation">
+         <enum>Qt::Horizontal</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>40</width>
+          <height>20</height>
+         </size>
+        </property>
+       </spacer>
+      </item>
+      <item>
+       <widget class="QLabel" name="rfPulseIcon">
+        <property name="text">
+         <string>RF</string>
+        </property>
+        <property name="alignment">
+         <set>Qt::AlignCenter</set>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="clockLabel">
+        <property name="text">
+         <string>--.--.---- --:--:--</string>
+        </property>
+        <property name="alignment">
+         <set>Qt::AlignCenter</set>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="adminLoginButton">
+        <property name="text">
+         <string>Admin Paneli</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </item>
+    <item>
+     <layout class="QHBoxLayout" name="stepBadgeLayout">
+      <item>
+       <widget class="QLabel" name="step1Badge">
+        <property name="text">
+         <string>1. Baglanti Modu</string>
+        </property>
+        <property name="alignment">
+         <set>Qt::AlignCenter</set>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="step2Badge">
+        <property name="text">
+         <string>2. Donanim Konfigurasyonu</string>
+        </property>
+        <property name="alignment">
+         <set>Qt::AlignCenter</set>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="step3Badge">
+        <property name="text">
+         <string>3. Firmware Guncelleme</string>
+        </property>
+        <property name="alignment">
+         <set>Qt::AlignCenter</set>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </item>
+    <item>
+     <widget class="QStackedWidget" name="wizardStack">
+      <property name="currentIndex">
+       <number>0</number>
+      </property>
+      <widget class="QWidget" name="stepModePage">
+       <layout class="QVBoxLayout" name="stepModeLayout">
+        <item>
+         <widget class="QLabel" name="modeTitleLabel">
+          <property name="text">
+           <string>Adim 1: Baglanti Modunu Secin</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="modeSubtitleLabel">
+          <property name="text">
+           <string>RF modu secmeden devam ederseniz RF guncelleme akisina gecilmez.</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QFrame" name="modeCardsContainer">
+          <layout class="QHBoxLayout" name="modeCardsLayout">
+           <property name="spacing">
+            <number>16</number>
+           </property>
+           <item>
+            <widget class="QPushButton" name="modeSerialCard">
+             <property name="text">
+              <string>SERI PORT (USB)
+Kablolu baglanti</string>
+             </property>
+             <property name="minimumHeight">
+              <number>220</number>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="modeRfCard">
+             <property name="text">
+              <string>RF MODU (Kablosuz)
+Gateway uzerinden guncelleme</string>
+             </property>
+             <property name="minimumHeight">
+              <number>220</number>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="modeValidationLabel">
+          <property name="text">
+           <string>Bir mod secmeden devam edemezsiniz.</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="modeBottomSpacer">
+          <property name="orientation">
+           <enum>Qt::Vertical</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>20</width>
+            <height>40</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="stepConfigPage">
+       <layout class="QVBoxLayout" name="stepConfigLayout">
+        <item>
+         <widget class="QLabel" name="configTitleLabel">
+          <property name="text">
+           <string>Adim 2: Donanim Konfigurasyonu</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QGroupBox" name="deviceGroupBox">
+          <property name="title">
+           <string>Cihaz ve Port Ayarlari</string>
+          </property>
+          <layout class="QGridLayout" name="deviceGridLayout">
+           <item row="0" column="0">
+            <widget class="QLabel" name="deviceLabel">
+             <property name="text">
+              <string>Cihaz:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="1">
+            <widget class="QComboBox" name="deviceCombo"/>
+           </item>
+           <item row="0" column="2">
+            <widget class="QLabel" name="portLabel">
+             <property name="text">
+              <string>COM Port:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="3">
+            <widget class="QComboBox" name="portCombo"/>
+           </item>
+           <item row="0" column="4">
+            <widget class="QPushButton" name="refreshPortsButton">
+             <property name="text">
+              <string>Yenile</string>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="0">
+            <widget class="QLabel" name="baudLabel">
+             <property name="text">
+              <string>Baud:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="1" colspan="2">
+            <widget class="QLabel" name="baudValueLabel">
+             <property name="text">
+              <string>115200</string>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="3" colspan="2">
+            <widget class="QCheckBox" name="rfModeCheck">
+             <property name="text">
+              <string>RF Modu Aktif</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="configHintLabel">
+          <property name="text">
+           <string>Secilen moda gore ayarlar otomatik duzenlenir.</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="configBottomSpacer">
+          <property name="orientation">
+           <enum>Qt::Vertical</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>20</width>
+            <height>40</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="stepFirmwarePage">
+       <layout class="QVBoxLayout" name="stepFirmwareLayout">
+        <item>
+         <widget class="QLabel" name="firmwareTitleLabel">
+          <property name="text">
+           <string>Adim 3: Firmware ve Guncelleme</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QGroupBox" name="firmwareGroupBox">
+          <property name="title">
+           <string>Firmware Secimi</string>
+          </property>
+          <layout class="QGridLayout" name="firmwareGridLayout">
+           <item row="0" column="0">
+            <widget class="QComboBox" name="firmwareCombo"/>
+           </item>
+           <item row="0" column="1">
+            <widget class="QPushButton" name="scanFolderButton">
+             <property name="text">
+              <string>Yenile</string>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="0" colspan="2">
+            <widget class="QLabel" name="updateStatusLabel">
+             <property name="text">
+              <string>Liste bekleniyor</string>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="0" colspan="2">
+            <layout class="QHBoxLayout" name="badgeLayout">
+             <item>
+              <widget class="QLabel" name="versionBadge">
+               <property name="text">
+                <string>Versiyon: -</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="sizeBadge">
+               <property name="text">
+                <string>Boyut: -</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="typeBadge">
+               <property name="text">
+                <string>Tip: -</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+           <item row="3" column="0" colspan="2">
+            <widget class="QLabel" name="firmwareInfoLabel">
+             <property name="text">
+              <string/>
+             </property>
+             <property name="wordWrap">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="startUploadButton">
+          <property name="text">
+           <string>Guncellemeyi Baslat</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <layout class="QHBoxLayout" name="progressLayout">
+          <item>
+           <widget class="QProgressBar" name="progressBar">
+            <property name="value">
+             <number>0</number>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="progressLabel">
+            <property name="text">
+             <string>0%</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+        <item>
+         <widget class="QFrame" name="completionContainer">
+          <property name="visible">
+           <bool>false</bool>
+          </property>
+          <layout class="QVBoxLayout" name="completionLayout">
+           <property name="spacing">
+            <number>8</number>
+           </property>
+           <property name="leftMargin">
+            <number>0</number>
+           </property>
+           <property name="topMargin">
+            <number>0</number>
+           </property>
+           <property name="rightMargin">
+            <number>0</number>
+           </property>
+           <property name="bottomMargin">
+            <number>0</number>
+           </property>
+           <item>
+            <widget class="QLabel" name="completionMessageLabel">
+             <property name="text">
+              <string>Guncelleme tamamlandi.</string>
+             </property>
+             <property name="alignment">
+              <set>Qt::AlignCenter</set>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <layout class="QHBoxLayout" name="completionButtonsLayout">
+             <item>
+              <spacer name="completionLeftSpacer">
+               <property name="orientation">
+                <enum>Qt::Horizontal</enum>
+               </property>
+               <property name="sizeHint" stdset="0">
+                <size>
+                 <width>40</width>
+                 <height>20</height>
+                </size>
+               </property>
+              </spacer>
+             </item>
+             <item>
+              <widget class="QPushButton" name="newUpdateButton">
+               <property name="text">
+                <string>Yeni Guncelleme Baslat</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="editSettingsButton">
+               <property name="text">
+                <string>Ayarlari Duzenle</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <spacer name="completionRightSpacer">
+               <property name="orientation">
+                <enum>Qt::Horizontal</enum>
+               </property>
+               <property name="sizeHint" stdset="0">
+                <size>
+                 <width>40</width>
+                 <height>20</height>
+                </size>
+               </property>
+              </spacer>
+             </item>
+            </layout>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPlainTextEdit" name="logTextEdit">
+          <property name="readOnly">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+     </widget>
+    </item>
+    <item>
+     <layout class="QHBoxLayout" name="wizardNavLayout">
+      <item>
+       <widget class="QPushButton" name="backStepButton">
+        <property name="text">
+         <string>Geri</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <spacer name="navSpacer">
+        <property name="orientation">
+         <enum>Qt::Horizontal</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>40</width>
+          <height>20</height>
+         </size>
+        </property>
+       </spacer>
+      </item>
+      <item>
+       <widget class="QPushButton" name="nextStepButton">
+        <property name="text">
+         <string>Ileri</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </item>
+    <item>
+     <widget class="QLabel" name="statusLabel">
+      <property name="text">
+       <string>Hazir</string>
+      </property>
+     </widget>
+    </item>
+   </layout>
+  </widget>
+  <widget class="QMenuBar" name="menubar"/>
+  <widget class="QStatusBar" name="statusbar"/>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

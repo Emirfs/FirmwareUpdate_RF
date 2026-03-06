@@ -2,11 +2,18 @@
 
 
 a = Analysis(
-    ['gui_uploader.py'],
+    ['gui_uploader_qt.py'],
     pathex=[],
     binaries=[],
-    datas=[],
-    hiddenimports=['config_manager', 'drive_manager', 'intelhex'],
+    datas=[('ui/main_window.ui', 'ui'), ('ui/admin_window.ui', 'ui')],
+    hiddenimports=[
+        'config_manager',
+        'drive_manager',
+        'intelhex',
+        'PySide6.QtUiTools',
+        'PySide6.QtCore',
+        'PySide6.QtWidgets',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

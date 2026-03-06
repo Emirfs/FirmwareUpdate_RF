@@ -1,0 +1,3 @@
+../Core/Src/boot_rf.c:41:6:RF_SendPacket	80	static
+../Core/Src/boot_rf.c:68:9:RF_WaitForPacket	40	static
+../Core/Src/boot_rf.c:108:9:RF_SendReliable	96	static

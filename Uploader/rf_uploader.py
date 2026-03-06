@@ -1,23 +1,50 @@
 """
-RF Firmware Uploader — Si4432 RF üzerinden uzaktan firmware güncelleme.
+rf_uploader.py — Si4432 RF uzerinden uzaktan STM32 Firmware Guncelleme
 
-Bu modül mevcut uploder.py ile aynı protokolü kullanır ancak RF iletim
-gecikmelerini karşılamak için daha uzun timeout'lar uygular.
+─── BU DOSYA NE YAPAR? ──────────────────────────────────────────────────────
+PC → (UART) → Gonderici STM32 → (Si4432 433 MHz RF) → Alici STM32 Bootloader
 
-Gönderici cihaz (STM32F030C8) UART↔RF köprüsü görevi görür:
-  PC --UART--> Gönderici --Si4432 RF--> Alıcı Bootloader
+PC bu scriptle gonderici cihaza (UART) baglanir. Gonderici cihaz RF koprusu
+olarak gorev yapar; gelen UART komutlarini/verilerini RF paketlerine cevirerek
+alici bootloader'a iletir.
 
-UART protokolü aynıdır:
-  1. 'W' gönder → ACK bekle (alıcı bootloader'a geçene kadar)
-  2. Metadata(12 byte) gönder → ACK bekle
-  3. Flash erase ACK bekle
-  4. Paketler (148 byte = IV+Encrypted+CRC) gönder → her biri için ACK
-  5. Final ACK/NACK bekle
+─── UART PROTOKOLU ──────────────────────────────────────────────────────────
+Adim 1: 'W' gonder (1 byte)
+        Gonderici BOOT_REQUEST yayinlar, alici BOOT_ACK dondurur
+        → ACK (0x06) bekle
 
-Farklar:
-  - Timeout'lar çok daha uzun (RF iletim + 3 chunk ACK süresi)
-  - Paket arası bekleme daha uzun
-  - Retry sayısı daha fazla
+Adim 2: Metadata gonder (12 byte, little-endian)
+        [firmware_size:4][firmware_version:4][firmware_crc32:4]
+        → ACK (0x06) bekle
+
+Adim 3: Flash erase bekleme
+        Alici 119 sayfa x 2KB = 238KB'yi siler, uzun surer
+        → ACK (0x06) bekle (FLASH_ERASE_DONE geldiginde)
+
+Adim 4: Paket dongusu
+        Her paket: AES-256-CBC sifrele → [IV:16][Encrypted:128][CRC32:4] = 148 byte
+        148 byte'i gonder → ACK bekle
+        (Gonderici bu 148 byte'i 4 RF chunk olarak aliciya iletir)
+
+Adim 5: Final dogrulama
+        Alici tum veriyi cozup Flash CRC'sini kontrol eder
+        → ACK (0x06) = basarili, NACK (0x15) = basarisiz
+
+─── AES SIFRELEME ───────────────────────────────────────────────────────────
+Her 128 byte'lik firmware blogu AES-256-CBC ile sifrelenr:
+  - AES key: 32 byte (alici cihazin DEFAULT_AES_KEY ile ayni olmali)
+  - IV: Her paket icin rastgele 16 byte (os.urandom)
+  - CRC: Sifrelenmis verinin CRC-32'si (paket butunlugu icin)
+
+─── DEGISTIRILECEK SEYLER ───────────────────────────────────────────────────
+- DEFAULT_AES_KEY (--key arg veya config): Alici DEFAULT_AES_KEY ile ayni olmali
+- RF_*_TIMEOUT sabitleri: RF ortam kosuluna gore arttirilabilir
+- RF_PACKET_DELAY: Paketler arasi bekleme (RF stabilite icin)
+
+─── BAGIMLILIKLAR ───────────────────────────────────────────────────────────
+pycryptodome : pip install pycryptodome  (AES icin)
+intelhex     : pip install intelhex      (HEX dosyasi destegi, opsiyonel)
+pyserial     : pip install pyserial      (UART iletisimi)
 """
 
 import serial
@@ -44,20 +71,33 @@ except ImportError:
 # SABITLER
 # ═══════════════════════════════════════════════
 
+# Sifreli firmware paketi boyutu: sifresiz 128 byte blok boyutu
 DEFAULT_PACKET_SIZE = 128
 
-# RF modu için timeout'lar (mevcut UART'tan çok daha uzun)
-RF_HANDSHAKE_TIMEOUT = 45      # 'W' → ACK (BOOT_REQUEST + BOOT_ACK süresi)
-RF_METADATA_TIMEOUT = 15       # Metadata → ACK
-RF_FLASH_ERASE_TIMEOUT = 90    # Flash erase süresi (119 sayfa × 2KB)
-RF_PACKET_TIMEOUT = 20         # Her paket → ACK (3 chunk × ACK süresi)
-RF_FINAL_TIMEOUT = 45          # Final CRC doğrulama + sonuç
-RF_PACKET_DELAY = 0.5          # Paketler arası bekleme (RF stabilite)
-RF_MAX_RETRIES = 10            # Paket retry sayısı
+# RF modu timeout'lari — UART dogrudan baglantisindan cok daha uzun
+# Cunku her paketin 4 RF chunk gonderimi + ACK bekleme suresi var
+RF_HANDSHAKE_TIMEOUT = 45   # 'W' → ACK: BOOT_REQUEST yayini + BOOT_ACK donusu
+RF_METADATA_TIMEOUT  = 15   # Metadata → ACK: RF ile iletme + alici onayı
+RF_FLASH_ERASE_TIMEOUT = 90 # Flash erase: 119 sayfa x ~5ms = min ~600ms ama guvenli
+RF_PACKET_TIMEOUT = 20      # Her 148-byte paket → ACK: 4 RF chunk + 4 ACK
+RF_FINAL_TIMEOUT  = 45      # Final CRC dogrulama: tum Flash tarama + RF mesaj
+RF_PACKET_DELAY   = 0.5     # Paketler arasi bekleme (RF RF stabilite icin)
+RF_MAX_RETRIES    = 10      # NACK veya timeout durumunda tekrar deneme sayisi
 
 
 def hex_to_bin(hex_data: bytes) -> bytes:
-    """Intel HEX formatındaki veriyi raw binary'ye dönüştürür."""
+    """
+    Intel HEX formatindaki veriyi raw binary'ye donusturur.
+
+    Oncelikle intelhex kutuphanesi kullanilir (daha guvenilir).
+    Yoksa basit bir el yazimi HEX parser kullanilir.
+
+    Desteklenen record tipleri:
+      0x00 = Data
+      0x01 = End Of File
+      0x02 = Extended Segment Address
+      0x04 = Extended Linear Address
+    """
     if INTELHEX_AVAILABLE:
         ih = IntelHex()
         ih.loadhex(io.StringIO(hex_data.decode('ascii', errors='ignore')))
@@ -102,14 +142,15 @@ def hex_to_bin(hex_data: bytes) -> bytes:
 
 
 def calculate_crc32(data):
+    """CRC-32 hesapla (zlib/ISO-HDLC — STM32'deki Calculate_CRC32 ile ayni)."""
     return zlib.crc32(data) & 0xFFFFFFFF
 
 
 def progress_bar(current, total, width=40):
-    """Terminal'de ilerleme çubuğu göster."""
+    """Terminal'de ilerleme cubugu goster: [████░░░░] 50% (5/10)"""
     percent = current * 100 // total
     filled = width * current // total
-    bar = '█' * filled + '░' * (width - filled)
+    bar = '#' * filled + '.' * (width - filled)
     print(f"\r  [{bar}] {percent}% ({current}/{total})", end='', flush=True)
 
 
@@ -151,25 +192,27 @@ def upload_firmware_rf(config, log=None, on_progress=None, stop_flag=None):
     def _stopped():
         return stop_flag() if stop_flag else False
 
-    # Config'den ayarları oku
-    serial_port = config.get("serial_port", "COM7")
-    baud_rate = config.get("baud_rate", 115200)
-    aes_key_hex = config.get("aes_key_hex", "")
-    firmware_version = config.get("firmware_version", 1)
-    packet_size = config.get("packet_size", DEFAULT_PACKET_SIZE)
-    firmware_file = config.get("firmware_file", "")
-    file_type = config.get("file_type", "BIN").upper()
+    # ─── CONFIG PARAMETRELERI ───────────────────────────────────────────
+    serial_port      = config.get("serial_port", "COM7")       # Gonderici bagli port
+    baud_rate        = config.get("baud_rate", 115200)          # UART hizi
+    aes_key_hex      = config.get("aes_key_hex", "")           # 32 byte = 64 hex karakter
+    firmware_version = config.get("firmware_version", 1)       # Versiyon numarasi
+    packet_size      = config.get("packet_size", DEFAULT_PACKET_SIZE)  # 128 byte
+    firmware_file    = config.get("firmware_file", "")         # .bin veya .hex dosya yolu
+    file_type        = config.get("file_type", "BIN").upper()  # "BIN" veya "HEX"
 
-    # AES key dönüşümü
+    # AES key donusumu: hex string → bytes
+    # Ornek: "3132...3132" (64 hex karakter) → b'1234...12' (32 byte)
     try:
         aes_key = bytes.fromhex(aes_key_hex)
         if len(aes_key) != 32:
-            _log("❌ AES key 32 byte (64 hex karakter) olmalıdır!")
+            _log("AES key 32 byte (64 hex karakter) olmalidir!")
             return False
     except ValueError:
+        # Hex degil, ASCII string olarak dene (gelistirme/test icin)
         aes_key = aes_key_hex.encode('utf-8')
         if len(aes_key) != 32:
-            _log("❌ AES key 32 byte olmalıdır!")
+            _log("AES key 32 byte olmalidir!")
             return False
 
     ser = None
@@ -300,32 +343,39 @@ def upload_firmware_rf(config, log=None, on_progress=None, stop_flag=None):
             if not packet:
                 break
 
-            # PKCS padding
+            # Son paket kisaysa null ile tamamla (padding)
             packet = packet.ljust(packet_size, b'\x00')
-            
-            # AES-256 CBC şifrele
-            iv = os.urandom(16)
-            cipher = AES.new(aes_key, AES.MODE_CBC, iv)
-            encrypted = cipher.encrypt(packet)
-            crc_val = calculate_crc32(encrypted)
 
+            # AES-256-CBC sifreleme:
+            #   iv        : Her paket icin 16 byte rastgele (os.urandom)
+            #   encrypted : 128 byte sifrelenmis firmware blogu
+            #   crc_val   : Sifrelenmis verinin CRC-32 (bozulma tespiti)
+            # Gonderilecek: [IV:16][Encrypted:128][CRC32:4] = 148 byte
+            iv = os.urandom(16)                        # Rastgele IV
+            cipher = AES.new(aes_key, AES.MODE_CBC, iv)
+            encrypted = cipher.encrypt(packet)         # 128 byte sifreli veri
+            crc_val = calculate_crc32(encrypted)       # Sifreli verinin CRC'si
+
+            # 148 byte'lik tam paket olustur
             payload = iv + encrypted + crc_val.to_bytes(4, 'little')
 
+        # Paketi gonder — NACK veya timeout durumunda RF_MAX_RETRIES kez tekrar
             success = False
             for attempt in range(1, RF_MAX_RETRIES + 1):
-                ser.write(payload)
-                time.sleep(RF_PACKET_DELAY)
-                
-                resp_byte = ser.read(1)
-                if resp_byte == b'\x06':
+                ser.write(payload)           # 148 byte UART'a gonder
+                time.sleep(RF_PACKET_DELAY) # RF'in 4 chunk iletmesi icin bekle
+
+                resp_byte = ser.read(1)     # ACK (0x06) veya NACK (0x15) bekle
+                if resp_byte == b'\x06':    # ACK = basarili (gonderici alicidan ACK aldi)
                     packets_sent += 1
                     success = True
                     break
-                elif resp_byte == b'\x15':
-                    _log(f"  ⚠️  NACK paket {packets_sent+1} (deneme {attempt}/{RF_MAX_RETRIES})")
+                elif resp_byte == b'\x15':  # NACK = alici bir chunk'u reddetti
+                    _log(f"  NACK paket {packets_sent+1} (deneme {attempt}/{RF_MAX_RETRIES})")
                     time.sleep(0.2)
                 else:
-                    _log(f"  ❓ Bilinmeyen: {resp_byte.hex() if resp_byte else 'timeout'} "
+                    # Bos veya bilinmeyen yanit — timeout muhtemelen
+                    _log(f"  Bilinmeyen: {resp_byte.hex() if resp_byte else 'timeout'} "
                          f"(deneme {attempt}/{RF_MAX_RETRIES})")
                     time.sleep(0.5)
 

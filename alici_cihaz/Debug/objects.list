@@ -1,4 +1,8 @@
 "./Core/Src/aes.o"
+"./Core/Src/boot_flow.o"
+"./Core/Src/boot_led.o"
+"./Core/Src/boot_rf.o"
+"./Core/Src/boot_storage.o"
 "./Core/Src/gpio.o"
 "./Core/Src/iwdg.o"
 "./Core/Src/main.o"
