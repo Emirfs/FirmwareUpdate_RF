@@ -1,0 +1,43 @@
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.claude/
+*.tmp
+*.log
+
+# Python
+**/__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.python-version
+.venv/
+venv/
+env/
+
+# Uploader local runtime and packaged outputs
+Uploader/build/
+Uploader/dist/
+Uploader/application.log
+Uploader/config.enc
+Uploader/credentials.enc
+Uploader/private_key.pem
+Uploader/public_key_bytes.txt
+Uploader/proxy_channels.json
+
+# STM32 generated build output
+**/Debug/
+**/Release/
+*.elf
+*.map
+*.list
+*.o
+*.d
+*.su
+*.cyclo
+objects.list
+sources.mk
+subdir.mk
+

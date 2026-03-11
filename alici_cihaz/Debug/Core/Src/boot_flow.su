@@ -1,3 +1,0 @@
-../Core/Inc/c25519.h:30:20:c25519_prepare	16	static
-../Core/Src/boot_flow.c:99:6:jump_to_application	48	static,ignoring_inline_asm
-../Core/Src/boot_flow.c:166:6:Bootloader_Main	896	static

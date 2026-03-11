@@ -134,14 +134,14 @@ FirmwareUpdate_RF/
 ├─ README.md
 ├─ docs/
 │  └─ images/
-│     ├─ 01-hero-overview.svg
-│     ├─ 02-step-1-mode-selection.svg
-│     ├─ 03-step-2-device-port.svg
-│     ├─ 04-step-3-firmware-list.svg
-│     ├─ 05-upload-progress.svg
-│     ├─ 06-upload-success.svg
-│     ├─ 07-admin-devices.svg
-│     └─ 08-admin-security.svg
+│     ├─ 01-hero-overview.png
+│     ├─ 02-step-1-mode-selection.png
+│     ├─ 03-step-2-device-port.png
+│     ├─ 04-step-3-firmware-list.png
+│     ├─ 05-upload-progress.png
+│     ├─ 06-upload-success.png
+│     ├─ 07-admin-devices.png
+│     └─ 08-admin-security.png
 ├─ Uploader/
 │  ├─ gui_uploader_qt.py
 │  ├─ uploder.py
@@ -547,35 +547,35 @@ The admin panel contains three main tabs:
 
 ### 1. Genel açılış görünümü / General opening overview
 
-![Hero overview placeholder](docs/images/01-hero-overview.svg)
+![Hero overview placeholder](docs/images/01-hero-overview.png)
 
 ### 2. Adım 1: Bağlantı modu seçimi / Step 1: Connection mode selection
 
-![Step 1 placeholder](docs/images/02-step-1-mode-selection.svg)
+![Step 1 placeholder](docs/images/02-step-1-mode-selection.png)
 
 ### 3. Adım 2: Cihaz ve port ayarları / Step 2: Device and port settings
 
-![Step 2 placeholder](docs/images/03-step-2-device-port.svg)
+![Step 2 placeholder](docs/images/03-step-2-device-port.png)
 
 ### 4. Adım 3: Firmware listesi ve sürüm seçimi / Step 3: Firmware list and version selection
 
-![Step 3 placeholder](docs/images/04-step-3-firmware-list.svg)
+![Step 3 placeholder](docs/images/04-step-3-firmware-list.png)
 
 ### 5. Güncelleme sırasında ilerleme ekranı / Upload progress screen
 
-![Upload progress placeholder](docs/images/05-upload-progress.svg)
+![Upload progress placeholder](docs/images/05-upload-progress.png)
 
 ### 6. Başarılı güncelleme sonucu / Successful update result
 
-![Upload success placeholder](docs/images/06-upload-success.svg)
+![Upload success placeholder](docs/images/06-upload-success.png)
 
 ### 7. Admin paneli: cihaz yönetimi / Admin panel: device management
 
-![Admin devices placeholder](docs/images/07-admin-devices.svg)
+![Admin devices placeholder](docs/images/07-admin-devices.png)
 
 ### 8. Admin paneli: ayarlar ve güvenlik / Admin panel: settings and security
 
-![Admin security placeholder](docs/images/08-admin-security.svg)
+![Admin security placeholder](docs/images/08-admin-security.png)
 
 ## Kurulum ve Çalıştırma / Setup and Run
 

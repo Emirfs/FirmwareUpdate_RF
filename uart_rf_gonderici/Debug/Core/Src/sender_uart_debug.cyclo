@@ -1,4 +1,0 @@
-../Core/Src/sender_uart_debug.c:34:6:SenderDebug_SetEnabled	1
-../Core/Src/sender_uart_debug.c:37:6:Print	2
-../Core/Src/sender_uart_debug.c:46:6:PrintHex	2
-../Core/Src/sender_uart_debug.c:57:6:PrintBuf	2

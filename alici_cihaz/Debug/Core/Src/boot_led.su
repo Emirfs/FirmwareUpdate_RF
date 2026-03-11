@@ -1,5 +1,0 @@
-../Core/Src/boot_led.c:29:6:LED_Bootloader	8	static
-../Core/Src/boot_led.c:35:6:LED_Error	16	static
-../Core/Src/boot_led.c:48:6:LED_Success	16	static
-../Core/Src/boot_led.c:62:6:LED_Transfer	16	static
-../Core/Src/boot_led.c:72:6:LED_Off	8	static
