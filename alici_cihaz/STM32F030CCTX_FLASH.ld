@@ -38,14 +38,19 @@ ENTRY(Reset_Handler)
 /* Highest address of the user mode stack */
 _estack = ORIGIN(RAM) + LENGTH(RAM); /* end of "RAM" Ram type memory */
 
-_Min_Heap_Size = 0x800; /* required amount of heap */
-_Min_Stack_Size = 0xc00; /* required amount of stack */
+_Min_Heap_Size = 0x0; /* bootloader dynamic allocation kullanmiyor */
+_Min_Stack_Size = 0x800; /* 2KB: su raporunda 1008B tepe kullanim + guvenlik payi */
+
+/* Stack canary: stack'in izin verilen en alt adresi.
+ * boot_flow.c bu adrese 0xDEADBEEF yazar ve periyodik kontrol eder.
+ * Cortex-M0'da MPU olmadigi icin yazilimsal koruma. */
+_stack_bottom = _estack - _Min_Stack_Size;
 
 /* Memories definition */
 MEMORY
 {
   RAM    (xrw)    : ORIGIN = 0x20000000,   LENGTH = 32K
-  FLASH    (rx)    : ORIGIN = 0x08000000,   LENGTH = 32K   /* Bootloader only — application starts at 0x08008000 */
+  FLASH    (rx)    : ORIGIN = 0x0800C000 ,   LENGTH = 128K   /* Bootloader only — application starts at 0x0800C000 */
   
 }
 

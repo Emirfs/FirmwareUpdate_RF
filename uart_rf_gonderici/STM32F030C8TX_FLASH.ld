@@ -41,6 +41,9 @@ _estack = ORIGIN(RAM) + LENGTH(RAM); /* end of "RAM" Ram type memory */
 _Min_Heap_Size = 0x500; /* required amount of heap */
 _Min_Stack_Size = 0x300; /* required amount of stack */
 
+/* Stack canary: stack'in izin verilen en alt adresi. */
+_stack_bottom = _estack - _Min_Stack_Size;
+
 /* Memories definition */
 MEMORY
 {

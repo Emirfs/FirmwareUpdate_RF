@@ -5,6 +5,7 @@ import io
 import os
 import sys
 import re
+import hashlib
 from Crypto.Cipher import AES
 import zlib
 
@@ -13,8 +14,6 @@ try:
     INTELHEX_AVAILABLE = True
 except ImportError:
     INTELHEX_AVAILABLE = False
-
-from drive_manager import DriveManager
 
 DRIVE_URL_TEMPLATE = "https://drive.google.com/uc?export=download&id={}"
 DEFAULT_PACKET_SIZE = 128
@@ -198,7 +197,7 @@ def upload_firmware(config, log=None, on_progress=None, stop_flag=None, drive_ma
         log (func): Log mesajlarını ekrana/GUI'ye basan callback
         on_progress (func): İlerleme durumunu (current, total) bildiren callback
         stop_flag (func): İşlemi durdurmak için True dönen fonksiyon
-        drive_manager (DriveManager): Drive işlemleri için yardımcı sınıf
+        drive_manager: Dosya indirme için yardımcı sınıf
     """
     def _log(msg):
         if log:
@@ -218,7 +217,10 @@ def upload_firmware(config, log=None, on_progress=None, stop_flag=None, drive_ma
     # Config'den ayarları oku
     serial_port = config.get("serial_port", "COM7")
     baud_rate = config.get("baud_rate", 115200)
-    drive_file_id = config.get("drive_file_id", "")
+    firmware_source = str(config.get("firmware_source", "drive")).strip().lower()
+    if firmware_source not in ("drive", "proxy"):
+        firmware_source = "drive"
+    file_ref = str(config.get("file_ref", config.get("drive_file_id", ""))).strip()
     aes_key_hex = config.get("aes_key_hex", "")
     max_retries = config.get("max_retries", 7)
     firmware_version = config.get("firmware_version", 1)
@@ -226,6 +228,21 @@ def upload_firmware(config, log=None, on_progress=None, stop_flag=None, drive_ma
     file_type = config.get("file_type", "BIN").upper()
     filename = config.get("filename", "")
     is_rf = config.get("is_rf", False)
+
+    if not file_ref:
+        _log("❌ Dosya referansi bos.")
+        return False
+
+    # RF auth ayarları — rf_bootloader.h içindeki DEFAULT_AUTH_KEY / DEFAULT_AUTH_PASSWORD ile eşleşmeli
+    auth_key_hex = config.get(
+        "auth_key_hex",
+        "A1B2C3D4E5F60718293A4B5C6D7E8F900112233445566778899AABBCCDDEEFF0"
+    )
+    auth_password_hex = config.get(
+        "auth_password_hex",
+        "DEADBEEFCAFEBABE123456789ABCDEF0"
+    )
+    private_key_path = config.get("private_key_path", "private_key.pem")
 
     # Dinamik timeout'lar (Kablolu vs RF)
     TIMEOUT_HANDSHAKE = 45 if is_rf else 15
@@ -249,7 +266,10 @@ def upload_firmware(config, log=None, on_progress=None, stop_flag=None, drive_ma
             _log("❌ AES key 32 byte olmalıdır!")
             return False
 
-    bin_file_url = DRIVE_URL_TEMPLATE.format(drive_file_id)
+    if firmware_source == "drive":
+        bin_file_url = DRIVE_URL_TEMPLATE.format(file_ref)
+    else:
+        bin_file_url = ""
 
     ser = None
     firmware_data = None
@@ -262,18 +282,21 @@ def upload_firmware(config, log=None, on_progress=None, stop_flag=None, drive_ma
         
         firmware_data = None
         
-        # DriveManager varsa onu kullan (Service Account veya fallback)
+        # Manager varsa onu kullan (Drive veya Proxy)
         if drive_manager:
             # RAM'e indir (BytesIO)
-            f_data, err = drive_manager.download_file_to_memory(drive_file_id, progress_callback=lambda p: None)
+            f_data, err = drive_manager.download_file_to_memory(file_ref, progress_callback=lambda p: None)
             if not f_data:
                 _log(f"❌ İndirme başarısız: {err}")
                 return False
             
             raw_firmware = f_data.read()
 
-        # Yoksa eski yöntem (Requests)
+        # Manager yoksa sadece legacy Drive modunda fallback var
         else:
+            if firmware_source == "proxy":
+                _log("❌ Proxy modunda indirme için backend manager gerekli.")
+                return False
             resp = requests.get(bin_file_url, timeout=30)
             resp.raise_for_status()
             if 'text/html' in resp.headers.get('Content-Type', ''):
@@ -331,6 +354,66 @@ def upload_firmware(config, log=None, on_progress=None, stop_flag=None, drive_ma
 
         if _stopped():
             return False
+
+        # ═══════════════════════════════════════════════
+        # 3.5. RF KİMLİK DOĞRULAMA (NONCE CHALLENGE-RESPONSE)
+        # STM32 gönderici, alıcıdan AUTH_CHALLENGE alınca
+        # 4-byte nonce'u bize iletir; biz şifreli auth paketini döneriz.
+        # ═══════════════════════════════════════════════
+        if is_rf:
+            _log("🔐 Kimlik doğrulama başlatılıyor...")
+
+            try:
+                auth_key = bytes.fromhex(auth_key_hex)
+                auth_password = bytes.fromhex(auth_password_hex)
+            except ValueError as e:
+                _log(f"❌ Auth key/password hex geçersiz: {e}")
+                return False
+
+            if len(auth_key) != 32:
+                _log("❌ auth_key_hex 32 byte (64 hex karakter) olmalı!")
+                return False
+            if len(auth_password) != 16:
+                _log("❌ auth_password_hex 16 byte (32 hex karakter) olmalı!")
+                return False
+
+            # STM32'den 4-byte nonce bekle (alıcı gönderdi, STM32 iletir)
+            ser.timeout = 30
+            nonce = ser.read(4)
+            if len(nonce) != 4:
+                _log(f"❌ Nonce alınamadı! (alınan: {len(nonce)} byte)")
+                return False
+            _log(f"  Nonce: {nonce.hex()}")
+
+            # Auth paketi: IV(16) + AES256_CBC(auth_key, IV, nonce[4]+password[16]+pad[12])(32) + CRC32(4) = 52 byte
+            plaintext = nonce + auth_password + b'\x00' * 12  # 32 byte
+            iv = os.urandom(16)
+            cipher = AES.new(auth_key, AES.MODE_CBC, iv)
+            encrypted = cipher.encrypt(plaintext)
+            auth_48 = iv + encrypted  # 48 byte
+            crc = calculate_crc32(auth_48)
+            auth_packet = auth_48 + crc.to_bytes(4, 'little')  # 52 byte
+
+            ser.write(auth_packet)
+
+            # Auth ACK/NACK bekle
+            ser.timeout = 30
+            auth_resp = ser.read(1)
+            if auth_resp != b'\x06':
+                _log(f"❌ Auth başarısız! Gelen: {auth_resp.hex() if auth_resp else 'boş'}")
+                return False
+            _log("✅ Auth başarılı!")
+
+            # RF modunda: sender auth sonrası BOOT_REQUEST/BOOT_ACK RF döngüsüne girer.
+            # Biz metadata göndermeden ÖNCE sender'ın bu adımı tamamladığını onaylamalıyız.
+            # Sender BOOT_ACK alınca PC'ye ek ACK gönderir (Byte 7 = BOOT_ACK_ACK).
+            # Bu byte okunmadan metadata yazılırsa UART overrun oluşur.
+            ser.timeout = 35  # BOOT_REQUEST timeout 30s + marj
+            boot_ack_signal = ser.read(1)
+            if boot_ack_signal != b'\x06':
+                _log(f"❌ Bootloader bağlantısı kurulamadı! Gelen: {boot_ack_signal.hex() if boot_ack_signal else 'boş'}")
+                return False
+            _log("🔗 Alıcı bootloader modunda!")
 
         # ═══════════════════════════════════════════════
         # 4. METADATA GÖNDER → ACK bekle
@@ -421,9 +504,48 @@ def upload_firmware(config, log=None, on_progress=None, stop_flag=None, drive_ma
                 _log(f"\n  📊 {packets_sent}/{total_packets} | Kalan: ~{int(remaining)}s")
 
         # ═══════════════════════════════════════════════
+        # 6.5. RF: ED25519 DİJİTAL İMZA GÖNDER
+        # ═══════════════════════════════════════════════
+        if is_rf:
+            _log("\n🔏 Firmware imzalanıyor (Ed25519 / RFC 8032)...")
+            try:
+                # key_gen.py ile aynı dizinde — APPDATA veya script dizini
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                key_path = (private_key_path if os.path.isabs(private_key_path)
+                            else os.path.join(script_dir, private_key_path))
+
+                from key_gen import sign_firmware as _sign_fw
+                # Receiver ile aynı padding → SHA-256(padded_firmware)
+                padded_size = total_packets * packet_size
+                raw_fw_padded = raw_firmware.ljust(padded_size, b'\x00')
+                signature = _sign_fw(raw_fw_padded, key_path)  # 64 byte
+                if len(signature) != 64:
+                    _log(f"❌ Geçersiz imza boyutu: {len(signature)}")
+                    return False
+            except FileNotFoundError:
+                _log(f"❌ Özel anahtar bulunamadı: {key_path}")
+                _log("   → 'python key_gen.py' ile Ed25519 anahtar çifti oluşturun.")
+                return False
+            except Exception as e:
+                _log(f"❌ İmzalama hatası: {e}")
+                return False
+
+            _log(f"  İmza: {signature[:8].hex()}...{signature[-4:].hex()} (64 byte Ed25519)")
+
+            # 64-byte imzayı gönder; sender 2 SIG_CHUNK'a bölerek alıcıya iletecek
+            ser.timeout = 30
+            ser.write(signature)
+
+            sig_ack = ser.read(1)
+            if sig_ack != b'\x06':
+                _log(f"❌ İmza iletimi başarısız! Gelen: {sig_ack.hex() if sig_ack else 'boş'}")
+                return False
+            _log("✅ İmza alıcıya iletildi!")
+
+        # ═══════════════════════════════════════════════
         # 7. FİNAL DOĞRULAMA
         # ═══════════════════════════════════════════════
-        _log("\n⏳ Firmware doğrulanıyor (CRC-32)...")
+        _log("\n⏳ Firmware doğrulanıyor (CRC-32 + Ed25519)...")
         ser.timeout = TIMEOUT_FINAL
 
         ack = ser.read(1)
@@ -460,7 +582,8 @@ if __name__ == "__main__":
     config = {
         "serial_port": "COM7",
         "baud_rate": 115200,
-        "drive_file_id": "1YOQiPoHZ2D2RTP8xroTUG9fAXh1dliGZ",
+        "firmware_source": "drive",
+        "file_ref": "",
         "aes_key_hex": "3132333435363738393031323334353637383930313233343536373839303132",
         "packet_size": 128,
         "max_retries": 7,

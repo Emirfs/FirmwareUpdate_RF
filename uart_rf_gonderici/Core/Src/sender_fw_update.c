@@ -44,14 +44,106 @@ void FirmwareUpdate_Mode(void) {
   uint16_t rx_seq;
   uint8_t rx_pld_len;
 
-  /* Kaldigi yerden devam noktasi: alici BOOT_ACK payload'inda bildirir.
-   * 0 = bastan basla, N > 0 = ilk N paket zaten yazilmis, atla. */
+  /* Kaldigi yerden devam noktasi: alici BOOT_ACK payload'inda bildirir. */
   uint32_t resume_start_packet = 0;
+
+  /* Toplam paket sayisi — metadata'dan okunduktan sonra doldurulur. */
+  uint32_t total_fw_packets = 0;
 
   /* FW update sırasında debug print'i kapat — UART meşgul olacak */
   SenderDebug_SetEnabled(0);
 
   HAL_GPIO_WritePin(LED0_GPIO_Port, LED0_Pin, GPIO_PIN_SET); // LED0 yak: FW update aktif
+
+  /* ===================================================================
+   * ADIM 0: KİMLİK DOĞRULAMA (NONCE CHALLENGE-RESPONSE)
+   * =================================================================== */
+  Print("[FW] Auth baslatiliyor...\r\n");
+
+  {
+    uint8_t  auth_pkt[52]; /* PC'den: IV(16)+Encrypted(32)+CRC32(4) */
+    uint8_t  nonce_buf[4];
+    uint8_t  challenge_got = 0;
+    uint32_t auth_start = HAL_GetTick();
+
+    /* AUTH_REQUEST gonder, AUTH_CHALLENGE (nonce) gelene kadar bekle */
+    while (!challenge_got && (HAL_GetTick() - auth_start) < 15000) {
+      HAL_IWDG_Refresh(&hiwdg);
+      RF_SendPacket(RF_CMD_AUTH_REQUEST, rf_seq_counter, NULL, 0);
+
+      if (RF_WaitForPacket(&rx_type, &rx_seq, rx_pld, &rx_pld_len, 2000)) {
+        if (rx_type == RF_CMD_AUTH_CHALLENGE && rx_pld_len >= 4) {
+          memcpy(nonce_buf, rx_pld, 4);
+          challenge_got = 1;
+        }
+      }
+    }
+
+    if (!challenge_got) {
+      Print("[FW] HATA: Auth challenge alinamadi!\r\n");
+      HAL_UART_Transmit(&huart1, &nack, 1, 100);
+      goto fw_update_cleanup;
+    }
+
+    /* PC'ye once ACK gonder ('W' komutuna cevap), sonra nonce'u gonder */
+    HAL_UART_Transmit(&huart1, &ack, 1, 100);
+    /* Nonce'u (4 byte) PC'ye gonder — PC auth paketini olusturacak */
+    HAL_UART_Transmit(&huart1, nonce_buf, 4, 500);
+
+    /* PC'den 52-byte auth paketi bekle */
+    if (HAL_UART_Receive(&huart1, auth_pkt, 52, 15000) != HAL_OK) {
+      Print("[FW] HATA: Auth paketi alinamadi!\r\n");
+      HAL_UART_Transmit(&huart1, &nack, 1, 100);
+      goto fw_update_cleanup;
+    }
+
+    /* CRC dogrula (CRC-32/ISO-HDLC: auth_pkt[0..47] icin) */
+    uint32_t recv_crc, calc_crc;
+    memcpy(&recv_crc, &auth_pkt[48], 4);
+    calc_crc = 0xFFFFFFFF;
+    for (int ci = 0; ci < 48; ci++) {
+      calc_crc ^= (uint32_t)auth_pkt[ci];
+      for (int b = 0; b < 8; b++) {
+        if (calc_crc & 1) calc_crc = (calc_crc >> 1) ^ 0xEDB88320U;
+        else              calc_crc >>= 1;
+      }
+    }
+    calc_crc ^= 0xFFFFFFFF;
+
+    if (calc_crc != recv_crc) {
+      Print("[FW] HATA: Auth CRC gecersiz!\r\n");
+      HAL_UART_Transmit(&huart1, &nack, 1, 100);
+      goto fw_update_cleanup;
+    }
+
+    /* RF_CMD_AUTH gonder: IV(16)+Encrypted(32) = 48 byte */
+    uint8_t auth_ok = 0;
+    for (uint8_t retry = 0; retry < 5 && !auth_ok; retry++) {
+      RF_SendPacket(RF_CMD_AUTH, rf_seq_counter, auth_pkt, 48);
+
+      if (RF_WaitForPacket(&rx_type, &rx_seq, rx_pld, &rx_pld_len, 5000)) {
+        if (rx_type == RF_CMD_AUTH_ACK) {
+          auth_ok = 1;
+        } else if (rx_type == RF_CMD_AUTH_NACK) {
+          Print("[FW] HATA: Alici auth reddetti!\r\n");
+          HAL_UART_Transmit(&huart1, &nack, 1, 100);
+          goto fw_update_cleanup;
+        }
+      }
+      HAL_IWDG_Refresh(&hiwdg);
+    }
+    rf_seq_counter++;
+
+    if (!auth_ok) {
+      Print("[FW] HATA: Auth ACK alinamadi!\r\n");
+      HAL_UART_Transmit(&huart1, &nack, 1, 100);
+      goto fw_update_cleanup;
+    }
+
+    /* Auth basarili — PC'ye ACK ver */
+    HAL_UART_Transmit(&huart1, &ack, 1, 100);
+    Print("[FW] Auth basarili!\r\n");
+  }
 
   Print("[FW] Aliciya BOOT_REQUEST gonderiliyor...\r\n");
 
@@ -103,8 +195,7 @@ void FirmwareUpdate_Mode(void) {
     /* 30 saniye icinde BOOT_ACK gelmedi — PC'ye NACK gonder ve cik */
     Print("[FW] HATA: Alici bootloader'a gecilemedi!\r\n");
     HAL_UART_Transmit(&huart1, &nack, 1, 100);
-    HAL_GPIO_WritePin(LED0_GPIO_Port, LED0_Pin, GPIO_PIN_RESET);
-    return;
+    goto fw_update_cleanup;
   }
 
   /* Alici hazir — PC'ye ACK gonder, PC metadata gondermesini bekliyor */
@@ -120,33 +211,44 @@ void FirmwareUpdate_Mode(void) {
   if (HAL_UART_Receive(&huart1, meta_buf, 12, 10000) != HAL_OK) {
     Print("[FW] HATA: Metadata alinamadi!\r\n");
     HAL_UART_Transmit(&huart1, &nack, 1, 100);
-    return;
+    goto fw_update_cleanup;
   }
 
   Print("[FW] Metadata alindi, RF ile gonderiliyor...\r\n");
 
   uint8_t meta_sent = 0;
-  for (uint8_t retry = 0; retry < RF_MAX_RETRIES && !meta_sent; retry++) {
-    RF_SendPacket(RF_CMD_METADATA, rf_seq_counter, meta_buf, 12); // Metadata gonder
+  uint32_t meta_start = HAL_GetTick();
+  /* Zaman bazli deneme: BOOT_ACK gibi alakasiz paketler retry'i tukettirmesin.
+   * Alici bootloader henuz BOOT_ACK yayinliyor olabilir — biz metadata
+   * gonderiyor, alici hazir oldugunda ACK donecek. 15 saniye sure ver. */
+  while (!meta_sent && (HAL_GetTick() - meta_start) < 15000) {
+    RF_SendPacket(RF_CMD_METADATA, rf_seq_counter, meta_buf, 12);
 
-    /* 3 saniye ACK bekle */
     if (RF_WaitForPacket(&rx_type, &rx_seq, rx_pld, &rx_pld_len, 3000)) {
       if (rx_type == RF_CMD_ACK) {
         meta_sent = 1;
       }
+      /* Baska paket turu (BOOT_ACK vb.) → yoksay, devam et */
     }
     HAL_IWDG_Refresh(&hiwdg);
   }
-  rf_seq_counter++; // Sequence numarasini artir (her "islem" icin bir artis)
+  rf_seq_counter++;
 
   if (!meta_sent) {
     Print("[FW] HATA: Metadata gonderilemedi!\r\n");
     HAL_UART_Transmit(&huart1, &nack, 1, 100);
-    return;
+    goto fw_update_cleanup;
   }
 
   /* Metadata iletildi — PC'ye ACK */
   HAL_UART_Transmit(&huart1, &ack, 1, 100);
+
+  /* firmware_size'tan toplam paket sayisini hesapla */
+  {
+    uint32_t fw_size;
+    memcpy(&fw_size, meta_buf, 4);
+    total_fw_packets = (fw_size + FW_PACKET_SIZE - 1) / FW_PACKET_SIZE;
+  }
 
   /* ===================================================================
    * ADIM 3: ALICI HAZIR BİLDİRİMİ (FLASH_ERASE_DONE)
@@ -173,7 +275,7 @@ void FirmwareUpdate_Mode(void) {
   if (!erase_done) {
     Print("[FW] HATA: Flash silme zaman asimi!\r\n");
     HAL_UART_Transmit(&huart1, &nack, 1, 100);
-    return;
+    goto fw_update_cleanup;
   }
 
   Print("[FW] Flash silindi!\r\n");
@@ -203,23 +305,17 @@ void FirmwareUpdate_Mode(void) {
 
   uint32_t packets_sent = 0; // Toplam islenen paket sayisi (atlananlar dahil)
 
-  while (1) {
+  while (packets_sent < total_fw_packets) {
     HAL_IWDG_Refresh(&hiwdg);
 
     /* PC'den bir sonraki firmware paketini bekle (8 sn) */
     HAL_StatusTypeDef uart_status =
         HAL_UART_Receive(&huart1, fw_packet_buf, FW_FULL_PACKET_SIZE, 8000);
 
-    if (uart_status == HAL_TIMEOUT) {
-      /* Timeout — PC tum paketleri gonderdi, donguden cik */
-      Print("[FW] Paket bekleme timeout - transfer tamamlandi?\r\n");
-      break;
-    }
-
     if (uart_status != HAL_OK) {
       Print("[FW] HATA: UART alma hatasi!\r\n");
       HAL_UART_Transmit(&huart1, &nack, 1, 100);
-      return;
+      goto fw_update_cleanup;
     }
 
     /* Resume: bu paket alici tarafindan zaten yazilmissa RF'e gonderme.
@@ -267,7 +363,7 @@ void FirmwareUpdate_Mode(void) {
     if (!all_chunks_ok) {
       /* Herhangi bir chunk basarisiz — PC'ye NACK */
       HAL_UART_Transmit(&huart1, &nack, 1, 100);
-      return;
+      goto fw_update_cleanup;
     }
 
     packets_sent++;
@@ -282,6 +378,53 @@ void FirmwareUpdate_Mode(void) {
       PrintHex((uint8_t)(packets_sent & 0xFF));
       Print("\r\n");
     }
+  }
+
+  /* ===================================================================
+   * ADIM 4.5: ED25519 DİJİTAL İMZA GÖNDER
+   * PC'den 64-byte Ed25519 imzasini al (R[32] || S[32]).
+   * 2 RF_CMD_SIG_CHUNK paketiyle aliciya ilet:
+   *   chunk 0: [0x00][imza[0..31]]  = 33 byte
+   *   chunk 1: [0x01][imza[32..63]] = 33 byte
+   * Her chunk icin ACK bekle, sonra PC'ye tek ACK ver.
+   * =================================================================== */
+  Print("[FW] Ed25519 imza bekleniyor...\r\n");
+  {
+    uint8_t sig_buf[64];  /* Ed25519 imzasi: R[32] || S[32] */
+
+    /* PC'den 64-byte Ed25519 imzasini al */
+    if (HAL_UART_Receive(&huart1, sig_buf, 64, 15000) != HAL_OK) {
+      Print("[FW] HATA: Imza alinamadi!\r\n");
+      HAL_UART_Transmit(&huart1, &nack, 1, 100);
+      goto fw_update_cleanup;
+    }
+
+    /* 2 SIG_CHUNK: her biri [idx:1][data:32] = 33 byte */
+    for (uint8_t idx = 0; idx < 2; idx++) {
+      uint8_t chunk[33];
+      chunk[0] = idx;
+      memcpy(&chunk[1], &sig_buf[idx * 32], 32);
+
+      uint8_t chunk_ok = 0;
+      for (uint8_t retry = 0; retry < RF_MAX_RETRIES && !chunk_ok; retry++) {
+        RF_SendPacket(RF_CMD_SIG_CHUNK, rf_seq_counter, chunk, 33);
+        HAL_IWDG_Refresh(&hiwdg);
+        if (RF_WaitForPacket(&rx_type, &rx_seq, rx_pld, &rx_pld_len, 3000)) {
+          if (rx_type == RF_CMD_ACK) chunk_ok = 1;
+        }
+      }
+      rf_seq_counter++;
+
+      if (!chunk_ok) {
+        Print("[FW] HATA: Imza chunk gonderilemedi!\r\n");
+        HAL_UART_Transmit(&huart1, &nack, 1, 100);
+        goto fw_update_cleanup;
+      }
+    }
+
+    /* Imza aliciya ulasti — PC'ye ACK ver */
+    HAL_UART_Transmit(&huart1, &ack, 1, 100);
+    Print("[FW] Imza gonderildi\r\n");
   }
 
   /* ===================================================================
@@ -344,6 +487,7 @@ void FirmwareUpdate_Mode(void) {
     HAL_UART_Transmit(&huart1, &nack, 1, 100);
   }
 
+fw_update_cleanup:
   /* Temizlik: LED'leri sondur, debug print'i tekrar ac */
   HAL_GPIO_WritePin(LED0_GPIO_Port, LED0_Pin, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);

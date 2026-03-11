@@ -41,6 +41,9 @@
  *                  Resume_Init, Resume_GetStartPacket, Resume_SavePageDone
  * boot_led.c     → LED_Bootloader, LED_Error, LED_Success, LED_Transfer
  * aes.c          → AES_init_ctx_iv, AES_CBC_decrypt_buffer
+ * sha256.c        → SHA256_Init/Update/Final — firmware hash (sade SHA-256)
+ * ed25519_verify.c → ed25519_verify() — RFC 8032 Ed25519 imza dogrulama
+ * sha512.c         → SHA512_* — ed25519_verify icinde dahili kullanim
  */
 
 #include "boot_flow.h"
@@ -50,12 +53,45 @@
 #include "boot_storage.h"
 
 #include "aes.h"
+#include "ed25519_verify.h"
 #include "iwdg.h"
 #include "main.h"
 #include "neopixel.h"
 #include "rf_bootloader.h"
+#include "sha256.h"
 #include "si4432.h"
 #include <string.h>
+
+/* ─── Stack Canary ─────────────────────────────────────────────────────────
+ * Linker scriptten gelen _stack_bottom sembolunun adresine 0xDEADBEEF yaz.
+ * Eger stack buraya kadar buyurse deger bozulur — IWDG refresh noktalari
+ * bu degeri kontrol eder ve bozulursa sistemi resetler.
+ * Cortex-M0'da MPU olmadigi icin bu yazilimsal koruma tek secenek. */
+extern uint32_t _stack_bottom;
+#define STACK_CANARY_MAGIC 0xDEADBEEFUL
+
+static void stack_canary_init(void) {
+    *(volatile uint32_t *)&_stack_bottom = STACK_CANARY_MAGIC;
+}
+
+static void stack_canary_check(void) {
+    if (*(volatile uint32_t *)&_stack_bottom != STACK_CANARY_MAGIC) {
+        /* Stack tasması tespit edildi — acil reset */
+        NVIC_SystemReset();
+    }
+}
+
+/* ─── Nonce Üreteci ────────────────────────────────────────────────────────
+ * STM32F030'da donanim TRNG yok. SysTick + HAL_GetTick + bir mixer
+ * ile tahmin edilemez (ama kriptografik degil) rastgelelik saglanir.
+ * Nonce, replay atagi onleme icin kullanilir — kriptografik kalite
+ * gerekmiyor, sadece oturum basina benzersiz olmasi yeterli. */
+static uint32_t generate_nonce(void) {
+    uint32_t t  = HAL_GetTick();
+    uint32_t sv = SysTick->VAL;
+    /* Knuth multiplicative hash ile karıştır */
+    return (t ^ (sv << 13) ^ (t >> 7)) * 2654435761UL;
+}
 
 /* AES-256 key: PC'deki rf_uploader.py'daki key ile birebir ayni olmali.
  * "1234567890123456789012345678901 2" ASCII = 32 byte
@@ -68,8 +104,8 @@ static const uint8_t DEFAULT_AES_KEY[32] = {
 static uint8_t AES_KEY[32]; // Aktif AES key (DEFAULT_AES_KEY'den kopyalanir)
 
 /* Gelen 4 RF chunk'un biriktirilecegi tampon.
- * [IV:16][Encrypted:128][CRC32:4] = 148 byte + biraз tolerans */
-static uint8_t fw_assembly_buf[200];
+ * [IV:16][Encrypted:128][CRC32:4] = 148 byte */
+static uint8_t fw_assembly_buf[FW_FULL_PACKET_SIZE];
 
 /* Mevcut 148-byte paket icin alinan chunk sayisi (0..3, 4'te sifirlanir) */
 static uint8_t fw_chunks_received;
@@ -165,9 +201,13 @@ void Bootloader_Main(void) {
   struct AES_ctx aes_ctx;       // AES context (sifre cozme icin)
   Firmware_Metadata_t metadata; // Gondericiden gelen firmware bilgileri
   uint32_t total_packets = 0;   // Beklenen toplam paket sayisi (metadata'dan)
+  SHA256_CTX sha_ctx;           // SHA-256 birikimli hash (imza dogrulamasi icin)
 
   /* AES key'i default degerle yukle */
   memcpy(AES_KEY, DEFAULT_AES_KEY, 32);
+
+  /* Stack canary'yi yaz — overflow tespiti icin */
+  stack_canary_init();
 
   LED_Bootloader(); // NeoPixel turuncu — bootloader aktif
 
@@ -184,6 +224,92 @@ void Bootloader_Main(void) {
     while (1) {
       HAL_IWDG_Refresh(&hiwdg);
       LED_Error();
+    }
+  }
+
+  /* ===================================================================
+   * ADIM 1.5: KİMLİK DOĞRULAMA (NONCE CHALLENGE-RESPONSE)
+   *
+   * Gönderici RF_CMD_AUTH_REQUEST gönderene kadar bekle.
+   * Bir nonce (4 byte) üret → RF_CMD_AUTH_CHALLENGE olarak gönder.
+   * Gönderici nonce'u PC'ye iletir, PC AES-256-CBC ile şifreler:
+   *   plaintext: nonce(4) + AUTH_PASSWORD(16) + padding(12) = 32 byte
+   *   paket: IV(16) + AES256_CBC(AUTH_KEY, IV, plaintext)(32) = 48 byte
+   * RF_CMD_AUTH alındığında çöz → nonce + şifre doğrula.
+   * Başarısızsa sistemi durdur (flash'a asla yazmayız).
+   * =================================================================== */
+  {
+    uint32_t nonce = generate_nonce();
+    uint8_t  nonce_pld[4];
+    nonce_pld[0] = (uint8_t)(nonce       & 0xFF);
+    nonce_pld[1] = (uint8_t)((nonce >> 8) & 0xFF);
+    nonce_pld[2] = (uint8_t)((nonce >>16) & 0xFF);
+    nonce_pld[3] = (uint8_t)((nonce >>24) & 0xFF);
+
+    uint8_t rx_type, rx_pld[RF_MAX_PAYLOAD];
+    uint16_t rx_seq;
+    uint8_t rx_pld_len;
+    uint8_t auth_ok = 0;
+    uint32_t auth_start = HAL_GetTick();
+
+    /* 30 saniye icinde auth basarili olmazsa hata */
+    while (!auth_ok && (HAL_GetTick() - auth_start) < 30000) {
+      HAL_IWDG_Refresh(&hiwdg);
+      stack_canary_check();
+
+      /* AUTH_CHALLENGE yayinla (gonderici AUTH_REQUEST gonderince de cevap) */
+      RF_SendPacket(RF_CMD_AUTH_CHALLENGE, rf_seq_counter, nonce_pld, 4);
+
+      /* 2 saniye gelen paket bekle */
+      if (!RF_WaitForPacket(&rx_type, &rx_seq, rx_pld, &rx_pld_len, 2000)) {
+        continue;
+      }
+
+      if (rx_type == RF_CMD_AUTH_REQUEST) {
+        /* Gonderici hazir — hemen challenge gonder */
+        RF_SendPacket(RF_CMD_AUTH_CHALLENGE, rf_seq_counter, nonce_pld, 4);
+        continue;
+      }
+
+      if (rx_type == RF_CMD_AUTH && rx_pld_len == 48) {
+        /* Auth paketi geldi: [IV:16][Encrypted:32]
+         * AES-256-CBC ile coz → nonce(4) + AUTH_PASSWORD(16) + pad(12) */
+        uint8_t *iv_a  = &rx_pld[0];
+        uint8_t  plain[32];
+        memcpy(plain, &rx_pld[16], 32);
+
+        struct AES_ctx auth_ctx;
+        AES_init_ctx_iv(&auth_ctx, DEFAULT_AUTH_KEY, iv_a);
+        AES_CBC_decrypt_buffer(&auth_ctx, plain, 32);
+
+        /* Gelen nonce'u yeniden olustur */
+        uint32_t recv_nonce = (uint32_t)plain[0]
+                            | ((uint32_t)plain[1] << 8)
+                            | ((uint32_t)plain[2] << 16)
+                            | ((uint32_t)plain[3] << 24);
+
+        int nonce_ok = (recv_nonce == nonce);
+        int pass_ok  = (memcmp(&plain[4], DEFAULT_AUTH_PASSWORD, 16) == 0);
+
+        if (nonce_ok && pass_ok) {
+          RF_SendPacket(RF_CMD_AUTH_ACK, rx_seq, NULL, 0);
+          auth_ok = 1;
+        } else {
+          RF_SendPacket(RF_CMD_AUTH_NACK, rx_seq, NULL, 0);
+          /* Yeni nonce uret — sonraki deneme icin farkli olsun */
+          nonce = generate_nonce();
+          nonce_pld[0] = (uint8_t)(nonce       & 0xFF);
+          nonce_pld[1] = (uint8_t)((nonce >> 8) & 0xFF);
+          nonce_pld[2] = (uint8_t)((nonce >>16) & 0xFF);
+          nonce_pld[3] = (uint8_t)((nonce >>24) & 0xFF);
+        }
+      }
+    }
+
+    if (!auth_ok) {
+      /* Auth zaman asimi veya basarisiz — bootloader'da kal, flash dokunma */
+      LED_Error();
+      while (1) { HAL_IWDG_Refresh(&hiwdg); }
     }
   }
 
@@ -218,6 +344,7 @@ void Bootloader_Main(void) {
 
     while (!got_metadata) {
       HAL_IWDG_Refresh(&hiwdg);
+      stack_canary_check();
 
       /* BOOT_ACK gonder — payload'da kaldigi yer bilgisi var */
       RF_SendPacket(RF_CMD_BOOT_ACK, rf_seq_counter++, boot_ack_pld, 4);
@@ -225,7 +352,7 @@ void Bootloader_Main(void) {
       NeoPixel_SetAll(255, 80, 0); // Turuncu: bootloader bekleme
       NeoPixel_Show();
 
-      /* 1 saniye metadata bekle */
+      /* 1 saniye paket bekle */
       if (RF_WaitForPacket(&rx_type, &rx_seq, rx_pld, &rx_pld_len, 1000)) {
         if (rx_type == RF_CMD_METADATA && rx_pld_len >= 12) {
           /* Metadata alindi — firmware_size, version, crc32 doldur */
@@ -235,12 +362,29 @@ void Bootloader_Main(void) {
           got_metadata = 1;
 
           RF_SendPacket(RF_CMD_ACK, rx_seq, NULL, 0); // Metadata onaylandi
+        } else if (rx_type == RF_CMD_BOOT_REQUEST) {
+          /* Gonderici BOOT_REQUEST gonderdi — BOOT_ACK ile cevapla ve
+           * hemen metadata bekle (dongüye dönüp tekrar BOOT_ACK gönderme,
+           * yoksa sender'in metadata RF denemelerini tasiyor). */
+          RF_SendPacket(RF_CMD_BOOT_ACK, rf_seq_counter++, boot_ack_pld, 4);
+
+          /* Sender'in metadata gondermesi icin 5 saniye bekle */
+          if (RF_WaitForPacket(&rx_type, &rx_seq, rx_pld, &rx_pld_len, 5000)) {
+            if (rx_type == RF_CMD_METADATA && rx_pld_len >= 12) {
+              memcpy(&metadata, rx_pld, sizeof(Firmware_Metadata_t));
+              total_packets =
+                  (metadata.firmware_size + FW_PACKET_SIZE - 1) / FW_PACKET_SIZE;
+              got_metadata = 1;
+              RF_SendPacket(RF_CMD_ACK, rx_seq, NULL, 0);
+            }
+          }
+          HAL_IWDG_Refresh(&hiwdg);
         }
       }
 
       NeoPixel_Clear(); // LED off
       NeoPixel_Show();
-      HAL_Delay(200); // Kisa bekleme sonra tekrar BOOT_ACK gonder
+      if (!got_metadata) HAL_Delay(200); // Kisa bekleme sonra tekrar BOOT_ACK gonder
     }
 
     /* Resume state henuz baslatilmamissa (ilk transfer), simdi baslat.
@@ -285,7 +429,14 @@ void Bootloader_Main(void) {
       }
       HAL_IWDG_Refresh(&hiwdg);
     }
-    rf_seq_counter++; // Sequence numarasini artir
+    rf_seq_counter++;
+
+    if (!sent) {
+      /* Gonderici FLASH_ERASE_DONE'i onaylamadi — sistem sıfırlansın,
+       * tekrar bootloader'a girince yeni bir transfer baslatilir. */
+      LED_Error();
+      NVIC_SystemReset();
+    }
   }
 
   /* ===================================================================
@@ -323,8 +474,18 @@ void Bootloader_Main(void) {
     fw_chunks_received = 0;
     memset(fw_assembly_buf, 0, sizeof(fw_assembly_buf));
 
+    /* Sade SHA-256 baslat — Ed25519 imzanin kapsadigi firmware hash'i.
+     * NOT: HMAC k_ipad onek YOK — saf SHA-256(padded_firmware).
+     * Resume durumunda: zaten yazilmis sayfalar once hash'e dahil edilir. */
+    SHA256_Init(&sha_ctx);
+    if (resume_start > 0) {
+      SHA256_Update(&sha_ctx, (const uint8_t *)APP_ADDRESS,
+                   resume_start * FW_PACKET_SIZE);
+    }
+
     while (packets_received < total_packets) {
       HAL_IWDG_Refresh(&hiwdg);
+      stack_canary_check();
       LED_Transfer(packets_received); // Mavi/mor yanip sonsun — transfer gostergesi
 
       uint8_t rx_type, rx_pld[RF_MAX_PAYLOAD];
@@ -424,6 +585,11 @@ void Bootloader_Main(void) {
         /* Flash'a yaz (sifre cozulmus 128 byte) */
         Flash_Write_Data(current_addr, encrypted_ptr, 128);
 
+        /* SHA-256 birikimli hash: sifre cozulmus veriyi hash'e ekle.
+         * NOT: Flash yazimından SONRA hash'liyoruz — verify hatasindan once
+         * hash'e eklemek tutarsizlik yaratirdi. */
+        SHA256_Update(&sha_ctx, encrypted_ptr, FW_PACKET_SIZE);
+
         /* Yaz-oku dogrulama: yazilan veri dogru mu? */
         if (!Flash_Verify_Data(current_addr, encrypted_ptr, 128)) {
           RF_SendPacket(RF_CMD_UPDATE_FAILED, rf_seq_counter++,
@@ -446,6 +612,84 @@ void Bootloader_Main(void) {
         memset(fw_assembly_buf, 0, sizeof(fw_assembly_buf)); // Tampon temizle
       }
     }
+  }
+
+  /* ===================================================================
+   * ADIM 6.5: ED25519 DİJİTAL İMZA DOĞRULAMA (RFC 8032)
+   *
+   * Akış:
+   *   1. Sender 64-byte Ed25519 imzasini 2 RF_CMD_SIG_CHUNK'ta iletir:
+   *      chunk 0: [0x00][imza[0..31]]  = 33 byte payload
+   *      chunk 1: [0x01][imza[32..63]] = 33 byte payload
+   *   2. SHA-256 hash'ini tamamla → fw_hash (32 byte)
+   *   3. ed25519_verify(ED25519_PUBLIC_KEY, fw_hash, 32, imza) cagir
+   *   4. Basarisizsa UPDATE_FAILED — flash'ta eski firmware kaliyor (resume)
+   *
+   * Gizlilik: Private key hicbir zaman bu cihaza girmez.
+   * =================================================================== */
+  {
+    uint8_t sig_buf[64];                 /* 64-byte Ed25519 imzası */
+    uint8_t sig_received[2] = {0, 0};   /* Her chunk alındı mı? */
+    uint32_t sig_start = HAL_GetTick();
+
+    NeoPixel_SetAll(100, 0, 200);        /* Mor: imza bekleniyor */
+    NeoPixel_Show();
+
+    while ((!sig_received[0] || !sig_received[1]) &&
+           (HAL_GetTick() - sig_start) < 15000) {
+      HAL_IWDG_Refresh(&hiwdg);
+      stack_canary_check();
+
+      uint8_t rx_type, rx_pld[RF_MAX_PAYLOAD];
+      uint16_t rx_seq;
+      uint8_t rx_pld_len;
+
+      if (!RF_WaitForPacket(&rx_type, &rx_seq, rx_pld, &rx_pld_len, 3000)) {
+        continue;
+      }
+
+      /* SIG_CHUNK: [idx:1][data:32] = 33 byte */
+      if (rx_type == RF_CMD_SIG_CHUNK && rx_pld_len == 33) {
+        uint8_t idx = rx_pld[0];
+        if (idx < 2) {
+          memcpy(&sig_buf[idx * 32], &rx_pld[1], 32);
+          sig_received[idx] = 1;
+          RF_SendPacket(RF_CMD_ACK, rx_seq, NULL, 0);
+        }
+      }
+    }
+
+    if (!sig_received[0] || !sig_received[1]) {
+      RF_SendPacket(RF_CMD_UPDATE_FAILED, rf_seq_counter++,
+                    (uint8_t[]){RF_ERR_TIMEOUT}, 1);
+      LED_Error();
+      return;
+    }
+
+    /* SHA-256 hash'ini tamamla → firmware'in kanonik hash'i */
+    uint8_t fw_hash[32];
+    SHA256_Final(fw_hash, &sha_ctx);
+
+    /* Ed25519 imzasini dogrula (RFC 8032 Bolum 5.1.7) */
+    int sig_ok = ed25519_verify(ED25519_PUBLIC_KEY, fw_hash, 32, sig_buf);
+
+    if (sig_ok != 0) {
+      /* Imza gecersiz — yetkisiz, degistirilmis veya bozuk firmware */
+      for (uint8_t i = 0; i < 10; i++) {
+        RF_SendPacket(RF_CMD_UPDATE_FAILED, rf_seq_counter,
+                      (uint8_t[]){RF_ERR_SIG_FAIL}, 1);
+        uint8_t rx_type2, rx_pld2[RF_MAX_PAYLOAD];
+        uint16_t rx_seq2; uint8_t rx_pld_len2;
+        if (RF_WaitForPacket(&rx_type2, &rx_seq2, rx_pld2, &rx_pld_len2, 2000)) {
+          if (rx_type2 == RF_CMD_ACK) break;
+        }
+        HAL_IWDG_Refresh(&hiwdg);
+      }
+      rf_seq_counter++;
+      LED_Error();
+      return;
+    }
+    /* Imza gecerli — devam et */
   }
 
   /* ===================================================================

@@ -1,0 +1,6 @@
+../Core/Src/sha512.c:83:17:load64_be	1
+../Core/Src/sha512.c:90:13:store64_be	1
+../Core/Src/sha512.c:98:13:sha512_block	4
+../Core/Src/sha512.c:129:6:SHA512_Init	2
+../Core/Src/sha512.c:134:6:SHA512_Update	7
+../Core/Src/sha512.c:157:6:SHA512_Final	3

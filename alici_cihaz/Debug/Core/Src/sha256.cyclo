@@ -1,0 +1,4 @@
+../Core/Src/sha256.c:41:13:sha256_block	4
+../Core/Src/sha256.c:80:6:SHA256_Init	1
+../Core/Src/sha256.c:94:6:SHA256_Update	4
+../Core/Src/sha256.c:113:6:SHA256_Final	5

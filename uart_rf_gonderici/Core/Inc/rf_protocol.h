@@ -25,6 +25,14 @@
 #define RF_CMD_PING 0x12
 #define RF_CMD_PONG 0x13
 
+// Güvenlik komutları (kimlik doğrulama + dijital imza)
+#define RF_CMD_AUTH_REQUEST   0x14
+#define RF_CMD_AUTH_CHALLENGE 0x15
+#define RF_CMD_AUTH           0x16
+#define RF_CMD_AUTH_ACK       0x17
+#define RF_CMD_AUTH_NACK      0x18
+#define RF_CMD_SIG_CHUNK      0x19
+
 // Zamanlama sabitleri
 #define RF_ACK_TIMEOUT_MS 2000
 #define RF_MAX_RETRIES 5

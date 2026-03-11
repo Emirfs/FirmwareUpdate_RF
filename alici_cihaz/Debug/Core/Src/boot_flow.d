@@ -1,7 +1,7 @@
 Core/Src/boot_flow.o: ../Core/Src/boot_flow.c ../Core/Inc/boot_flow.h \
  ../Core/Inc/boot_led.h ../Core/Inc/boot_rf.h ../Core/Inc/boot_storage.h \
- ../Core/Inc/aes.h ../Core/Inc/iwdg.h ../Core/Inc/main.h \
- ../Drivers/STM32F0xx_HAL_Driver/Inc/stm32f0xx_hal.h \
+ ../Core/Inc/aes.h ../Core/Inc/ed25519_verify.h ../Core/Inc/iwdg.h \
+ ../Core/Inc/main.h ../Drivers/STM32F0xx_HAL_Driver/Inc/stm32f0xx_hal.h \
  ../Core/Inc/stm32f0xx_hal_conf.h \
  ../Drivers/STM32F0xx_HAL_Driver/Inc/stm32f0xx_hal_rcc.h \
  ../Drivers/STM32F0xx_HAL_Driver/Inc/stm32f0xx_hal_def.h \
@@ -34,12 +34,13 @@ Core/Src/boot_flow.o: ../Core/Src/boot_flow.c ../Core/Inc/boot_flow.h \
  ../Drivers/STM32F0xx_HAL_Driver/Inc/stm32f0xx_hal_tim.h \
  ../Drivers/STM32F0xx_HAL_Driver/Inc/stm32f0xx_hal_tim_ex.h \
  ../Core/Inc/main.h ../Core/Inc/neopixel.h ../Core/Inc/rf_bootloader.h \
- ../Core/Inc/si4432.h
+ ../Core/Inc/sha256.h ../Core/Inc/si4432.h
 ../Core/Inc/boot_flow.h:
 ../Core/Inc/boot_led.h:
 ../Core/Inc/boot_rf.h:
 ../Core/Inc/boot_storage.h:
 ../Core/Inc/aes.h:
+../Core/Inc/ed25519_verify.h:
 ../Core/Inc/iwdg.h:
 ../Core/Inc/main.h:
 ../Drivers/STM32F0xx_HAL_Driver/Inc/stm32f0xx_hal.h:
@@ -77,4 +78,5 @@ Core/Src/boot_flow.o: ../Core/Src/boot_flow.c ../Core/Inc/boot_flow.h \
 ../Core/Inc/main.h:
 ../Core/Inc/neopixel.h:
 ../Core/Inc/rf_bootloader.h:
+../Core/Inc/sha256.h:
 ../Core/Inc/si4432.h:

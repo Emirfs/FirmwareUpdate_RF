@@ -32,9 +32,8 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
  ../Drivers/STM32F0xx_HAL_Driver/Inc/stm32f0xx_hal_tim.h \
  ../Drivers/STM32F0xx_HAL_Driver/Inc/stm32f0xx_hal_tim_ex.h \
  ../Core/Inc/gpio.h ../Core/Inc/main.h ../Core/Inc/iwdg.h \
- ../Core/Inc/rtc.h ../Core/Inc/spi.h ../Core/Inc/tim.h \
- ../Core/Inc/boot_flow.h ../Core/Inc/boot_led.h ../Core/Inc/boot_rf.h \
- ../Core/Inc/boot_storage.h ../Core/Inc/neopixel.h \
+ ../Core/Inc/spi.h ../Core/Inc/boot_flow.h ../Core/Inc/boot_led.h \
+ ../Core/Inc/boot_rf.h ../Core/Inc/boot_storage.h ../Core/Inc/neopixel.h \
  ../Core/Inc/rf_bootloader.h ../Core/Inc/si4432.h
 ../Core/Inc/main.h:
 ../Drivers/STM32F0xx_HAL_Driver/Inc/stm32f0xx_hal.h:
@@ -72,9 +71,7 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
 ../Core/Inc/gpio.h:
 ../Core/Inc/main.h:
 ../Core/Inc/iwdg.h:
-../Core/Inc/rtc.h:
 ../Core/Inc/spi.h:
-../Core/Inc/tim.h:
 ../Core/Inc/boot_flow.h:
 ../Core/Inc/boot_led.h:
 ../Core/Inc/boot_rf.h:

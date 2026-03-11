@@ -1,2 +1,6 @@
-../Core/Src/boot_flow.c:98:6:jump_to_application	4
-../Core/Src/boot_flow.c:164:6:Bootloader_Main	33
+../Drivers/CMSIS/Include/core_cm0.h:856:34:__NVIC_SystemReset	1
+../Core/Src/boot_flow.c:73:13:stack_canary_init	1
+../Core/Src/boot_flow.c:77:13:stack_canary_check	1
+../Core/Src/boot_flow.c:89:17:generate_nonce	1
+../Core/Src/boot_flow.c:134:6:jump_to_application	4
+../Core/Src/boot_flow.c:200:6:Bootloader_Main	61

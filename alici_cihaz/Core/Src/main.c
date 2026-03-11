@@ -31,9 +31,7 @@
 #include "main.h"
 #include "gpio.h"
 #include "iwdg.h"
-#include "rtc.h"
 #include "spi.h"
-#include "tim.h"
 
 /* USER CODE BEGIN Includes */
 #include "boot_flow.h"
@@ -68,11 +66,6 @@ int main(void) {
   MX_GPIO_Init();        // GPIO — Si4432 CS/SDN/IRQ, NeoPixel vb.
   MX_SPI2_Init();        // Si4432 SPI baglantisi
   MX_IWDG_Init();        // Watchdog — sonsuz dongu koruması
-  MX_TIM17_Init();       // NeoPixel zamanlayicisi (tim.c)
-  MX_TIM6_Init();        // NeoPixel IC zamanlayicisi
-  MX_TIM16_Init();       // Timer (rezerve)
-  MX_TIM3_Init();        // Timer (rezerve)
-  MX_RTC_Init();         // RTC — LSI ile calisiyor (IWDG icin)
 
   /* NeoPixel LED baslatma */
   NeoPixel_Init();
@@ -121,8 +114,8 @@ int main(void) {
 
       /* 3 saniye BOOT_REQUEST bekle */
       if (RF_WaitForPacket(&rx_type, &rx_seq, rx_pld, &rx_pld_len, 3000)) {
-        if (rx_type == RF_CMD_BOOT_REQUEST) {
-          /* Gonderici bootloader istiyor → bootloader moduna gec */
+        if (rx_type == RF_CMD_BOOT_REQUEST || rx_type == RF_CMD_AUTH_REQUEST) {
+          /* Gonderici bootloader istiyor (BOOT_REQUEST veya AUTH_REQUEST) → bootloader moduna gec */
           NeoPixel_SetAll(255, 128, 0); // Turuncu — bootloader'a geciliyor
           NeoPixel_Show();
           Bootloader_Main();

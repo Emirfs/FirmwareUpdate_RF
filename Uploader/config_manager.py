@@ -53,7 +53,18 @@ DEFAULT_CONFIG = {
     "baud_rate": 115200,
     "packet_size": 128,
     "max_retries": 7,
-    "service_account_json": "C:\\Users\\Emir Furkan\\Desktop\\FirmwareUpdate\\eng-name-487012-d5-f4a48c3112a6.json",  # Google Drive Service Account JSON dosya yolu
+    # Firmware source: "proxy" (recommended) or "drive" (legacy)
+    "firmware_source": os.environ.get("FIRMWARE_SOURCE", "proxy"),
+    # Proxy mode: client never sees Drive IDs
+    "proxy_base_url": os.environ.get("FIRMWARE_PROXY_URL", "http://127.0.0.1:8787"),
+    "proxy_api_key": os.environ.get("FIRMWARE_PROXY_API_KEY", ""),
+    # Legacy direct Drive mode
+    "service_account_json": os.environ.get("FIRMWARE_SA_JSON_PATH", ""),
+    # RF güvenlik ayarları — rf_bootloader.h içindeki sabitlerle eşleşmeli
+    "auth_key_hex": "A1B2C3D4E5F60718293A4B5C6D7E8F900112233445566778899AABBCCDDEEFF0",
+    "auth_password_hex": "DEADBEEFCAFEBABE123456789ABCDEF0",
+    # Ed25519 özel anahtar yolu — key_gen.py ile oluşturulur
+    "private_key_path": "private_key.pem",
 }
 
 

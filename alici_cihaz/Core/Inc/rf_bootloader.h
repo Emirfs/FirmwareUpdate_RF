@@ -8,8 +8,8 @@
 // =========================================================================
 //
 //  0x08000000 ┌─────────────────────┐
-//             │   BOOTLOADER (32KB) │  Sayfa 0–15 (16 × 2KB)
-//  0x08008000 ├─────────────────────┤
+//             │   BOOTLOADER (48KB) │  Sayfa 0–15 (16 × 2KB)
+//  0x0800C000 ├─────────────────────┤
 //             │   APPLICATION       │  Sayfa 16–126 (111 × 2KB = 222KB)
 //  0x0803F800 ├─────────────────────┤
 //             │   BOOT FLAG (2KB)   │  Sayfa 127 (son sayfa)
@@ -18,13 +18,15 @@
 // =========================================================================
 
 // Uygulama başlangıç adresi (bootloader'dan sonra)
-#define APP_ADDRESS 0x08008000
+#define APP_ADDRESS 0x0800C000
 
 // Uygulama alanı boyutu (222KB = 111 sayfa × 2KB)
-#define APP_AREA_SIZE (222 * 1024)
+#define APP_AREA_SIZE (206 * 1024)
 
-// STM32F030 sayfa boyutu
+// STM32F030 sayfa boyutu (HAL zaten tanımlıyorsa kullan)
+#ifndef FLASH_PAGE_SIZE
 #define FLASH_PAGE_SIZE 2048
+#endif
 
 // Bootloader sayfa sayısı
 #define BOOTLOADER_PAGES 16
@@ -106,6 +108,17 @@
 #define RF_CMD_PING 0x12             // Bağlantı testi
 #define RF_CMD_PONG 0x13             // Bağlantı testi cevabı
 
+// ─── Kimlik Doğrulama (Nonce Challenge-Response) ─────────────────────────────
+#define RF_CMD_AUTH_REQUEST   0x14   // Gönderici → Alıcı: Auth başlat
+#define RF_CMD_AUTH_CHALLENGE 0x15   // Alıcı → Gönderici: 4-byte nonce
+#define RF_CMD_AUTH           0x16   // Gönderici → Alıcı: Şifreli auth paketi
+#define RF_CMD_AUTH_ACK       0x17   // Alıcı → Gönderici: Auth başarılı
+#define RF_CMD_AUTH_NACK      0x18   // Alıcı → Gönderici: Auth başarısız
+
+// ─── Dijital İmza (ECDSA-P256) ───────────────────────────────────────────────
+// 64-byte imza 2 RF paketiyle gönderilir (her biri 32 byte payload)
+#define RF_CMD_SIG_CHUNK      0x19   // Gönderici → Alıcı: İmza parçası [idx:1][data:32]
+
 // =========================================================================
 // RF Paket Yapısı
 // =========================================================================
@@ -168,6 +181,8 @@
 #define RF_ERR_FW_CRC_MISMATCH 0x07
 #define RF_ERR_TIMEOUT 0x08
 #define RF_ERR_SEQ_MISMATCH 0x09
+#define RF_ERR_AUTH_FAIL 0x10        // Kimlik doğrulama hatası (yanlış şifre/nonce)
+#define RF_ERR_SIG_FAIL  0x11        // ECDSA imza doğrulama hatası
 
 // =========================================================================
 // Firmware Metadata Yapısı (12 byte)
@@ -189,5 +204,59 @@ typedef struct {
   uint8_t payload[RF_MAX_PAYLOAD];
   uint8_t payload_len; // Gerçek payload uzunluğu
 } RF_Packet_t;
+
+// =========================================================================
+// Kimlik Doğrulama Sabitleri
+// =========================================================================
+//
+// Auth paketi yapısı (UART: 52 byte, RF: 48 byte):
+//   [IV:16][AES256_CBC(AUTH_KEY, IV, nonce[4]+AUTH_PASSWORD[16]+pad[12]):32][CRC32:4]
+//
+// ÖNEMLİ: Bu değerleri değiştirin! Varsayılan değerler GÜVENLİ DEĞİLDİR.
+// uploder.py içindeki auth_key_hex ve auth_password_hex ile EŞLEŞMELİDİR.
+// =========================================================================
+
+// Auth şifrelemesi için AES-256 anahtarı (firmware AES key'inden FARKLI olmalı)
+// DEĞİŞTİRİN: python key_gen.py ile veya rastgele 32 byte üretin
+static const uint8_t DEFAULT_AUTH_KEY[32] = {
+    0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0xF6, 0x07, 0x18,
+    0x29, 0x3A, 0x4B, 0x5C, 0x6D, 0x7E, 0x8F, 0x90,
+    0x01, 0x12, 0x23, 0x34, 0x45, 0x56, 0x67, 0x78,
+    0x89, 0x9A, 0xAB, 0xBC, 0xCD, 0xDE, 0xEF, 0xF0
+};
+
+// Şifre çözüldükten sonra beklenen 16-byte auth şifresi
+// DEĞİŞTİRİN: uploder.py auth_password_hex ile AYNI olmalı
+static const uint8_t DEFAULT_AUTH_PASSWORD[16] = {
+    0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE,
+    0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0
+};
+
+// =========================================================================
+// Ed25519 Açık Anahtar (32 byte)
+// =========================================================================
+//
+// Firmware dijital imza doğrulaması için.
+// PC özel anahtarıyla (private_key.pem) firmware SHA-256 hash'ini imzalar.
+// Bootloader bu açık anahtarla imzayı doğrular (RFC 8032 Ed25519).
+//
+// Asimetrik: Özel anahtar YALNIZCA PC'de → cihazdan anahtar çıkartılsa bile
+// geçerli imza üretilemez.
+//
+// NASIL ÜRETİLİR:
+//   cd Uploader && python key_gen.py
+//   Çıktıdaki diziyi buraya yapıştırın.
+//
+// ÖNEMLİ: Varsayılan (sıfır) değerle tüm imzalar reddedilir!
+// =========================================================================
+
+// DEĞİŞTİRİN: python key_gen.py çalıştırıp public_key_bytes.txt içeriğini yapıştırın
+static const uint8_t ED25519_PUBLIC_KEY[32] = {
+    0xA8, 0x41, 0x24, 0x70, 0x7F, 0x26, 0x81, 0x6B,
+    0xF9, 0x0D, 0x97, 0x7E, 0xAE, 0x11, 0x9F, 0x96,
+    0xEF, 0xA8, 0xA8, 0x74, 0xC7, 0x50, 0xD4, 0x2C,
+    0x68, 0x3A, 0x73, 0x3D, 0x47, 0x1F, 0xE6, 0x17
+    /* ↑ PLACEHOLDER — key_gen.py çıktısıyla değiştirin! */
+};
 
 #endif // RF_BOOTLOADER_H
