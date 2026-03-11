@@ -75,6 +75,35 @@
 #define RESUME_PAGE_MAP_ADDRESS (BOOT_FLAG_ADDRESS + 20) // Bitmap (111 x 2 byte)
 
 // =========================================================================
+// KEY_STORE — Kalıcı AES Master Key (Bootloader page 15)
+// =========================================================================
+//
+//  Adres: 0x08007800 (page 15 — bootloader alanının son sayfası)
+//  Uygulama firmware güncellemesi bu sayfaya dokunmaz.
+//
+//  Sayfa düzeni:
+//    +0  [4B]: KEY_STORE_MAGIC = 0xAE5CAFE5
+//    +4  [32B]: master_key[32]
+//    +36 [1B]: key_crc8 (master_key CRC-8)
+//
+#define KEY_STORE_ADDRESS 0x08007800U
+#define KEY_STORE_MAGIC   0xAE5CAFE5U
+#define KEY_STORE_PAGE    15U
+
+// =========================================================================
+// ECDH — X25519 Key Exchange
+// =========================================================================
+//
+// BOOT_REQUEST payload:  [pub_sender:32]  = 32 byte
+// BOOT_ACK payload:      [resume_start:4][pub_receiver:32] = 36 byte
+// KEY_UPDATE payload:    [AES_ECB(session_key, new_master_key):32][crc8:1] = 33 byte
+//
+#define ECDH_KEY_SIZE          32U  // X25519 key boyutu
+#define BOOT_REQUEST_PLD_SIZE  32U  // BOOT_REQUEST payload (pub_sender)
+#define BOOT_ACK_PLD_SIZE      36U  // BOOT_ACK payload (resume_start + pub_receiver)
+#define KEY_UPDATE_PLD_SIZE    33U  // KEY_UPDATE payload (encrypted_key + crc8)
+
+// =========================================================================
 // AES-256 Ayarları
 // =========================================================================
 
@@ -101,6 +130,8 @@
 #define RF_CMD_FLASH_ERASE_DONE 0x05 // Alıcı → Gönderici: Flash silindi
 #define RF_CMD_UPDATE_COMPLETE 0x06  // Alıcı → Gönderici: Güncelleme başarılı
 #define RF_CMD_UPDATE_FAILED 0x07    // Alıcı → Gönderici: Güncelleme başarısız
+#define RF_CMD_KEY_UPDATE 0x08       // Gönderici → Alıcı: Yeni master key (session key ile şifreli)
+#define RF_CMD_KEY_UPDATE_ACK 0x09   // Alıcı → Gönderici: Master key Flash'a yazıldı
 #define RF_CMD_ACK 0x10              // Genel onay
 #define RF_CMD_NACK 0x11             // Genel ret
 #define RF_CMD_PING 0x12             // Bağlantı testi

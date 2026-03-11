@@ -48,4 +48,11 @@ void Resume_SavePageDone(uint32_t page_idx); // Bir sayfa tamamlandi olarak isar
 uint32_t Flash_Read_Version(void);
 void Flash_Write_Version(uint32_t version);
 
+/* KEY_STORE — Kalici AES master key (page 15, 0x08007800)
+ *   KeyStore_Write : Yeni key'i Flash'a yaz (sayfa sil + magic + key + crc8)
+ *   KeyStore_Read  : Mevcut key'i oku (magic + crc8 dogrula)
+ *                    Donus: 1 = gecerli key kopyalandi, 0 = kayitli key yok */
+void KeyStore_Write(const uint8_t *key);
+uint8_t KeyStore_Read(uint8_t *key_out);
+
 #endif /* BOOT_STORAGE_H */

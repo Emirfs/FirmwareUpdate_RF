@@ -4,6 +4,6 @@
 ../Core/Src/si4432.c:63:13:SI4432_ResetRxFIFO	8	static
 ../Core/Src/si4432.c:68:13:SI4432_ResetTxFIFO	8	static
 ../Core/Src/si4432.c:76:6:SI4432_Init	16	static
-../Core/Src/si4432.c:177:6:SI4432_SendPacket	32	static
-../Core/Src/si4432.c:224:6:SI4432_StartRx	8	static
-../Core/Src/si4432.c:249:9:SI4432_CheckRx	32	static
+../Core/Src/si4432.c:176:6:SI4432_SendPacket	32	static
+../Core/Src/si4432.c:223:6:SI4432_StartRx	8	static
+../Core/Src/si4432.c:248:9:SI4432_CheckRx	32	static

@@ -1,4 +1,7 @@
+"./Core/Src/c25519.o"
 "./Core/Src/dma.o"
+"./Core/Src/entropy.o"
+"./Core/Src/f25519.o"
 "./Core/Src/gpio.o"
 "./Core/Src/iwdg.o"
 "./Core/Src/main.o"

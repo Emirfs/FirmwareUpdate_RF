@@ -5,7 +5,10 @@
 
 # Add inputs and outputs from these tool invocations to the build variables 
 C_SRCS += \
+../Core/Src/c25519.c \
 ../Core/Src/dma.c \
+../Core/Src/entropy.c \
+../Core/Src/f25519.c \
 ../Core/Src/gpio.c \
 ../Core/Src/iwdg.c \
 ../Core/Src/main.c \
@@ -25,7 +28,10 @@ C_SRCS += \
 ../Core/Src/usart.c 
 
 OBJS += \
+./Core/Src/c25519.o \
 ./Core/Src/dma.o \
+./Core/Src/entropy.o \
+./Core/Src/f25519.o \
 ./Core/Src/gpio.o \
 ./Core/Src/iwdg.o \
 ./Core/Src/main.o \
@@ -45,7 +51,10 @@ OBJS += \
 ./Core/Src/usart.o 
 
 C_DEPS += \
+./Core/Src/c25519.d \
 ./Core/Src/dma.d \
+./Core/Src/entropy.d \
+./Core/Src/f25519.d \
 ./Core/Src/gpio.d \
 ./Core/Src/iwdg.d \
 ./Core/Src/main.d \
@@ -72,7 +81,7 @@ Core/Src/%.o Core/Src/%.su Core/Src/%.cyclo: ../Core/Src/%.c Core/Src/subdir.mk
 clean: clean-Core-2f-Src
 
 clean-Core-2f-Src:
-	-$(RM) ./Core/Src/dma.cyclo ./Core/Src/dma.d ./Core/Src/dma.o ./Core/Src/dma.su ./Core/Src/gpio.cyclo ./Core/Src/gpio.d ./Core/Src/gpio.o ./Core/Src/gpio.su ./Core/Src/iwdg.cyclo ./Core/Src/iwdg.d ./Core/Src/iwdg.o ./Core/Src/iwdg.su ./Core/Src/main.cyclo ./Core/Src/main.d ./Core/Src/main.o ./Core/Src/main.su ./Core/Src/sender_fw_update.cyclo ./Core/Src/sender_fw_update.d ./Core/Src/sender_fw_update.o ./Core/Src/sender_fw_update.su ./Core/Src/sender_normal_mode.cyclo ./Core/Src/sender_normal_mode.d ./Core/Src/sender_normal_mode.o ./Core/Src/sender_normal_mode.su ./Core/Src/sender_rf_link.cyclo ./Core/Src/sender_rf_link.d ./Core/Src/sender_rf_link.o ./Core/Src/sender_rf_link.su ./Core/Src/sender_state.cyclo ./Core/Src/sender_state.d ./Core/Src/sender_state.o ./Core/Src/sender_state.su ./Core/Src/sender_uart_debug.cyclo ./Core/Src/sender_uart_debug.d ./Core/Src/sender_uart_debug.o ./Core/Src/sender_uart_debug.su ./Core/Src/si4432.cyclo ./Core/Src/si4432.d ./Core/Src/si4432.o ./Core/Src/si4432.su ./Core/Src/spi.cyclo ./Core/Src/spi.d ./Core/Src/spi.o ./Core/Src/spi.su ./Core/Src/stm32f0xx_hal_msp.cyclo ./Core/Src/stm32f0xx_hal_msp.d ./Core/Src/stm32f0xx_hal_msp.o ./Core/Src/stm32f0xx_hal_msp.su ./Core/Src/stm32f0xx_it.cyclo ./Core/Src/stm32f0xx_it.d ./Core/Src/stm32f0xx_it.o ./Core/Src/stm32f0xx_it.su ./Core/Src/syscalls.cyclo ./Core/Src/syscalls.d ./Core/Src/syscalls.o ./Core/Src/syscalls.su ./Core/Src/sysmem.cyclo ./Core/Src/sysmem.d ./Core/Src/sysmem.o ./Core/Src/sysmem.su ./Core/Src/system_stm32f0xx.cyclo ./Core/Src/system_stm32f0xx.d ./Core/Src/system_stm32f0xx.o ./Core/Src/system_stm32f0xx.su ./Core/Src/tim.cyclo ./Core/Src/tim.d ./Core/Src/tim.o ./Core/Src/tim.su ./Core/Src/usart.cyclo ./Core/Src/usart.d ./Core/Src/usart.o ./Core/Src/usart.su
+	-$(RM) ./Core/Src/c25519.cyclo ./Core/Src/c25519.d ./Core/Src/c25519.o ./Core/Src/c25519.su ./Core/Src/dma.cyclo ./Core/Src/dma.d ./Core/Src/dma.o ./Core/Src/dma.su ./Core/Src/entropy.cyclo ./Core/Src/entropy.d ./Core/Src/entropy.o ./Core/Src/entropy.su ./Core/Src/f25519.cyclo ./Core/Src/f25519.d ./Core/Src/f25519.o ./Core/Src/f25519.su ./Core/Src/gpio.cyclo ./Core/Src/gpio.d ./Core/Src/gpio.o ./Core/Src/gpio.su ./Core/Src/iwdg.cyclo ./Core/Src/iwdg.d ./Core/Src/iwdg.o ./Core/Src/iwdg.su ./Core/Src/main.cyclo ./Core/Src/main.d ./Core/Src/main.o ./Core/Src/main.su ./Core/Src/sender_fw_update.cyclo ./Core/Src/sender_fw_update.d ./Core/Src/sender_fw_update.o ./Core/Src/sender_fw_update.su ./Core/Src/sender_normal_mode.cyclo ./Core/Src/sender_normal_mode.d ./Core/Src/sender_normal_mode.o ./Core/Src/sender_normal_mode.su ./Core/Src/sender_rf_link.cyclo ./Core/Src/sender_rf_link.d ./Core/Src/sender_rf_link.o ./Core/Src/sender_rf_link.su ./Core/Src/sender_state.cyclo ./Core/Src/sender_state.d ./Core/Src/sender_state.o ./Core/Src/sender_state.su ./Core/Src/sender_uart_debug.cyclo ./Core/Src/sender_uart_debug.d ./Core/Src/sender_uart_debug.o ./Core/Src/sender_uart_debug.su ./Core/Src/si4432.cyclo ./Core/Src/si4432.d ./Core/Src/si4432.o ./Core/Src/si4432.su ./Core/Src/spi.cyclo ./Core/Src/spi.d ./Core/Src/spi.o ./Core/Src/spi.su ./Core/Src/stm32f0xx_hal_msp.cyclo ./Core/Src/stm32f0xx_hal_msp.d ./Core/Src/stm32f0xx_hal_msp.o ./Core/Src/stm32f0xx_hal_msp.su ./Core/Src/stm32f0xx_it.cyclo ./Core/Src/stm32f0xx_it.d ./Core/Src/stm32f0xx_it.o ./Core/Src/stm32f0xx_it.su ./Core/Src/syscalls.cyclo ./Core/Src/syscalls.d ./Core/Src/syscalls.o ./Core/Src/syscalls.su ./Core/Src/sysmem.cyclo ./Core/Src/sysmem.d ./Core/Src/sysmem.o ./Core/Src/sysmem.su ./Core/Src/system_stm32f0xx.cyclo ./Core/Src/system_stm32f0xx.d ./Core/Src/system_stm32f0xx.o ./Core/Src/system_stm32f0xx.su ./Core/Src/tim.cyclo ./Core/Src/tim.d ./Core/Src/tim.o ./Core/Src/tim.su ./Core/Src/usart.cyclo ./Core/Src/usart.d ./Core/Src/usart.o ./Core/Src/usart.su
 
 .PHONY: clean-Core-2f-Src
 

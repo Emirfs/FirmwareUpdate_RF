@@ -1,0 +1,5 @@
+../Core/Src/entropy.c:47:13:fnv1a_mix	2
+../Core/Src/entropy.c:72:17:adc_read_channel	3
+../Core/Src/entropy.c:92:13:adc_entropy_init	3
+../Core/Src/entropy.c:119:13:adc_entropy_deinit	1
+../Core/Src/entropy.c:129:6:entropy_generate	7

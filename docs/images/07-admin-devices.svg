@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900">
+  <rect width="1600" height="900" fill="#131116"/>
+  <rect x="40" y="40" width="1520" height="820" rx="28" fill="#221d28" stroke="#fb7185" stroke-width="4"/>
+  <text x="800" y="320" fill="#ffffff" font-family="Segoe UI, Arial, sans-serif" font-size="52" text-anchor="middle">PLACEHOLDER SCREENSHOT 07</text>
+  <text x="800" y="410" fill="#f4c0ca" font-family="Segoe UI, Arial, sans-serif" font-size="34" text-anchor="middle">Admin panel: device management</text>
+  <text x="800" y="500" fill="#f4c0ca" font-family="Segoe UI, Arial, sans-serif" font-size="28" text-anchor="middle">Suggested content: device list, selected device summary, AES field</text>
+</svg>

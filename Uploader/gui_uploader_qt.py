@@ -53,6 +53,7 @@ from config_manager import (
     verify_admin,
 )
 from drive_manager import DriveManager
+from firmware_proxy_client import FirmwareProxyClient
 from uploder import update_stm32_key, upload_firmware
 
 
@@ -77,8 +78,9 @@ class FirmwareUpdaterQtApp:
         self.config: Dict[str, Any] = DEFAULT_CONFIG.copy()
         self.admin_password: Optional[str] = None
         self.drive_manager: Optional[DriveManager] = None
+        self.proxy_client: Optional[FirmwareProxyClient] = None
         self.available_files: List[Dict[str, Any]] = []
-        self.pending_drive_version: Optional[int] = None
+        self.pending_firmware_version: Optional[int] = None
         self.stop_requested = False
         self.upload_thread: Optional[threading.Thread] = None
 
@@ -1398,9 +1400,12 @@ class FirmwareUpdaterQtApp:
         self.log_text.appendPlainText(f"[{stamp}] {message}")
         self.log_text.verticalScrollBar().setValue(self.log_text.verticalScrollBar().maximum())
 
-    def _reload_drive_manager(self) -> None:
-        service_json = self.config.get("service_account_json", "")
-        self.drive_manager = DriveManager(service_account_json=service_json)
+    def _reload_download_clients(self) -> None:
+        backend = str(self.config.get("proxy_backend", "")).strip()
+        self.proxy_client = FirmwareProxyClient.from_backend_spec(backend)
+
+        service_json = str(self.config.get("service_account_json", "")).strip()
+        self.drive_manager = DriveManager(service_account_json=service_json) if service_json else None
 
     def _try_load_config(self) -> None:
         if config_exists():
@@ -1411,7 +1416,7 @@ class FirmwareUpdaterQtApp:
                 self._append_log("Config sifreli. Admin girisi yapmadan admin paneli acilmaz.")
         else:
             self._append_log("Config dosyasi yok. Admin panelinden cihaz ekleyin.")
-        self._reload_drive_manager()
+        self._reload_download_clients()
         self._refresh_device_list()
 
     def _refresh_device_list(self) -> None:
@@ -1440,6 +1445,14 @@ class FirmwareUpdaterQtApp:
             if device.get("name") == name:
                 return device
         return None
+
+    def _device_channel(self, device: Optional[Dict[str, Any]]) -> str:
+        if not device:
+            return ""
+        return str(device.get("channel", "") or device.get("drive_file_id", "")).strip()
+
+    def _proxy_backend_value(self) -> str:
+        return str(self.config.get("proxy_backend", "")).strip()
 
     def _scan_ports(self) -> None:
         if self._upload_running:
@@ -1480,9 +1493,10 @@ class FirmwareUpdaterQtApp:
             self._shake_widget(self.device_combo)
             return
 
-        folder_id = device.get("drive_file_id", "").strip()
-        if not folder_id:
-            self._stop_update_animation("Drive klasor ID tanimli degil")
+        channel = self._device_channel(device)
+        use_proxy = bool(self._proxy_backend_value())
+        if not channel:
+            self._stop_update_animation("Kanal bilgisi tanimli degil")
             self._shake_widget(self.device_combo)
             return
 
@@ -1492,12 +1506,26 @@ class FirmwareUpdaterQtApp:
         self.scan_folder_button.setEnabled(False)
         self.available_files = []
 
-        if self.drive_manager is None:
-            self._reload_drive_manager()
-
         def worker() -> None:
             try:
-                files, error = self.drive_manager.list_all_files_in_folder(folder_id)  # type: ignore[union-attr]
+                if use_proxy:
+                    if self.proxy_client is None:
+                        self._reload_download_clients()
+                    if self.proxy_client is None:
+                        self.signals.scan_finished.emit(None, "Proxy istemcisi baslatilamadi.")
+                        return
+                    files, error = self.proxy_client.list_channel_files(channel)
+                else:
+                    folder_id = str(device.get("drive_file_id", "")).strip()
+                    if not folder_id:
+                        self.signals.scan_finished.emit(None, "Drive klasor ID tanimli degil")
+                        return
+                    if self.drive_manager is None:
+                        self._reload_download_clients()
+                    if self.drive_manager is None:
+                        self.signals.scan_finished.emit(None, "Drive Manager baslatilamadi.")
+                        return
+                    files, error = self.drive_manager.list_all_files_in_folder(folder_id)
                 self.signals.scan_finished.emit(files, error)
             except Exception as exc:
                 self.signals.scan_finished.emit(None, f"Beklenmeyen hata: {exc}")
@@ -1597,12 +1625,13 @@ class FirmwareUpdaterQtApp:
             return
 
         file_item = self.available_files[idx]
+        target_download_token = str(file_item.get("token", "")).strip()
         target_file_id = file_item.get("id", "")
         file_type = file_item.get("type", "BIN")
-        self.pending_drive_version = file_item.get("version")
+        self.pending_firmware_version = file_item.get("version")
 
-        if not target_file_id:
-            QMessageBox.warning(self.window, "Uyari", "Secilen dosyanin Drive ID bilgisi yok.")
+        if not target_download_token and not target_file_id:
+            QMessageBox.warning(self.window, "Uyari", "Secilen dosyanin indirme bilgisi yok.")
             self._shake_widget(self.firmware_combo)
             return
 
@@ -1615,6 +1644,7 @@ class FirmwareUpdaterQtApp:
         upload_cfg = {
             "serial_port": serial_port,
             "baud_rate": self.config.get("baud_rate", 115200),
+            "download_token": target_download_token,
             "drive_file_id": target_file_id,
             "aes_key_hex": aes_key,
             "packet_size": self.config.get("packet_size", 128),
@@ -1640,14 +1670,20 @@ class FirmwareUpdaterQtApp:
         self._append_log(f"Secilen firmware: {file_item.get('name', '')} [{file_type}]")
 
         def worker() -> None:
-            if self.drive_manager is None:
-                self._reload_drive_manager()
+            if target_download_token:
+                if self.proxy_client is None:
+                    self._reload_download_clients()
+                download_client = self.proxy_client
+            else:
+                if self.drive_manager is None:
+                    self._reload_download_clients()
+                download_client = self.drive_manager
             success = upload_firmware(
                 config=upload_cfg,
                 log=lambda msg: self.signals.log.emit(str(msg)),
                 on_progress=lambda cur, total: self.signals.progress.emit(int(cur), int(total)),
                 stop_flag=lambda: self.stop_requested,
-                drive_manager=self.drive_manager,
+                download_client=download_client,
             )
             self.signals.upload_finished.emit(bool(success))
 
@@ -1679,9 +1715,9 @@ class FirmwareUpdaterQtApp:
             )
             self._show_success_overlay()
             device = self._get_selected_device()
-            if device and self.pending_drive_version is not None:
-                device["last_installed_version"] = self.pending_drive_version
-                self.pending_drive_version = None
+            if device and self.pending_firmware_version is not None:
+                device["last_installed_version"] = self.pending_firmware_version
+                self.pending_firmware_version = None
                 if self.admin_password:
                     try:
                         save_config(self.config, self.admin_password)
@@ -1702,7 +1738,7 @@ class FirmwareUpdaterQtApp:
                 True,
                 "Guncelleme basarisiz. Yeni deneme icin ayarlari kontrol edin.",
             )
-        self.pending_drive_version = None
+        self.pending_firmware_version = None
 
     def _show_admin_login_dialog(self) -> None:
         if self.admin_password:
@@ -1744,7 +1780,7 @@ class FirmwareUpdaterQtApp:
             return
 
         self.admin_password = password
-        self._reload_drive_manager()
+        self._reload_download_clients()
         self._refresh_device_list()
         self._open_admin_window()
         self.admin_login_button.setText("Admin Paneli")
@@ -1764,7 +1800,7 @@ class FirmwareUpdaterQtApp:
         if self.default_port_edit is not None:
             self.default_port_edit.setText(str(self.config.get("serial_port", "COM7")))
         if self.service_json_edit is not None:
-            self.service_json_edit.setText(str(self.config.get("service_account_json", "")))
+            self.service_json_edit.setText(str(self.config.get("proxy_backend", "")))
         self._refresh_admin_device_list()
 
     def _refresh_admin_device_list(self) -> None:
@@ -1778,7 +1814,7 @@ class FirmwareUpdaterQtApp:
             last_ver = dev.get("last_installed_version", "?")
             item = QListWidgetItem(f"{name}  |  fw v{ver}  |  yuklu v{last_ver}")
             item.setData(Qt.UserRole, idx)
-            item.setToolTip(f"Drive ID: {dev.get('drive_file_id', '')}")
+            item.setToolTip(f"Kanal: {self._device_channel(dev)}")
             self.device_list_widget.addItem(item)
         self.device_list_widget.blockSignals(False)
         self._apply_admin_device_filter()
@@ -1814,7 +1850,7 @@ class FirmwareUpdaterQtApp:
 
             haystack = item.text().lower()
             if device:
-                haystack += " " + str(device.get("drive_file_id", "")).lower()
+                haystack += " " + self._device_channel(device).lower()
 
             is_visible = query in haystack if query else True
             item.setHidden(not is_visible)
@@ -1879,7 +1915,7 @@ class FirmwareUpdaterQtApp:
         self.meta_name_value.setText(str(dev.get("name", "Isimsiz")))
         self.meta_fw_value.setText(f"v{dev.get('firmware_version', '?')}")
         self.meta_last_value.setText(f"v{dev.get('last_installed_version', '?')}")
-        self.meta_drive_value.setText(str(dev.get("drive_file_id", "")))
+        self.meta_drive_value.setText(self._device_channel(dev))
         self.meta_aes_value.setText(aes_text)
 
     def _device_dialog(self, title: str, existing: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
@@ -1895,13 +1931,13 @@ class FirmwareUpdaterQtApp:
         last_ver_edit = QLineEdit(dialog)
 
         name_edit.setText(str(existing.get("name", "")))
-        drive_edit.setText(str(existing.get("drive_file_id", "")))
+        drive_edit.setText(self._device_channel(existing))
         key_edit.setText(str(existing.get("aes_key_hex", "")))
         ver_edit.setText(str(existing.get("firmware_version", 1)))
         last_ver_edit.setText(str(existing.get("last_installed_version", 0)))
 
         form.addRow("Cihaz Adi:", name_edit)
-        form.addRow("Drive Klasor ID:", drive_edit)
+        form.addRow("Kanal Adi:", drive_edit)
         form.addRow("AES Key (64 hex):", key_edit)
         form.addRow("Firmware Versiyon:", ver_edit)
         form.addRow("Yuklu Versiyon:", last_ver_edit)
@@ -1915,14 +1951,14 @@ class FirmwareUpdaterQtApp:
             return None
 
         name = name_edit.text().strip()
-        drive_id = drive_edit.text().strip()
+        channel = drive_edit.text().strip()
         key_hex = key_edit.text().strip()
 
         if not name:
             QMessageBox.warning(self._dialog_parent(), "Uyari", "Cihaz adi bos olamaz.")
             return None
-        if not drive_id:
-            QMessageBox.warning(self._dialog_parent(), "Uyari", "Drive klasor ID bos olamaz.")
+        if not channel:
+            QMessageBox.warning(self._dialog_parent(), "Uyari", "Kanal adi bos olamaz.")
             return None
         if len(key_hex) != 64:
             QMessageBox.warning(self._dialog_parent(), "Uyari", "AES key 64 hex karakter olmali.")
@@ -1942,7 +1978,7 @@ class FirmwareUpdaterQtApp:
 
         return {
             "name": name,
-            "drive_file_id": drive_id,
+            "channel": channel,
             "aes_key_hex": key_hex,
             "firmware_version": fw_ver,
             "last_installed_version": last_ver,
@@ -2004,14 +2040,14 @@ class FirmwareUpdaterQtApp:
             self.config["max_retries"] = int(self.retry_edit.text().strip())  # type: ignore[union-attr]
             self.config["packet_size"] = int(self.packet_edit.text().strip())  # type: ignore[union-attr]
             self.config["serial_port"] = self.default_port_edit.text().strip()  # type: ignore[union-attr]
-            self.config["service_account_json"] = self.service_json_edit.text().strip()  # type: ignore[union-attr]
+            self.config["proxy_backend"] = self.service_json_edit.text().strip()  # type: ignore[union-attr]
         except ValueError:
             QMessageBox.warning(self._dialog_parent(), "Uyari", "Sayi alanlari gecerli olmali.")
             return
 
         try:
             save_config(self.config, self.admin_password)
-            self._reload_drive_manager()
+            self._reload_download_clients()
             self._refresh_device_list()
             self._set_admin_status("Tum ayarlar kaydedildi.")
             QMessageBox.information(self._dialog_parent(), "Basarili", "Ayarlar kaydedildi.")
@@ -2088,7 +2124,7 @@ class FirmwareUpdaterQtApp:
         try:
             reset_config()
             self.config = DEFAULT_CONFIG.copy()
-            self._reload_drive_manager()
+            self._reload_download_clients()
             self._refresh_device_list()
             self._refresh_admin_panel()
             self._set_admin_status("Config sifirlandi.")

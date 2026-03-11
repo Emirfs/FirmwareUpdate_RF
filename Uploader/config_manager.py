@@ -53,7 +53,8 @@ DEFAULT_CONFIG = {
     "baud_rate": 115200,
     "packet_size": 128,
     "max_retries": 7,
-    "service_account_json": "C:\\Users\\Emir Furkan\\Desktop\\FirmwareUpdate\\eng-name-487012-d5-f4a48c3112a6.json",  # Google Drive Service Account JSON dosya yolu
+    "proxy_backend": "",
+    "service_account_json": "",  # Legacy direct-Drive fallback
 }
 
 

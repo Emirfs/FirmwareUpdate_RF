@@ -34,6 +34,7 @@
 #include "iwdg.h"
 #include "main.h"
 #include "rf_bootloader.h"
+#include <string.h>
 
 /*
  * Calculate_CRC32 — Yazilim CRC-32 hesaplama (RAM veya dizi icin)
@@ -373,4 +374,120 @@ void Flash_Write_Version(uint32_t version) {
   HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, VERSION_ADDRESS + 2,
                     (uint16_t)((version >> 16) & 0xFFFF));
   HAL_FLASH_Lock();
+}
+
+/* =========================================================================
+ * KEY_STORE Fonksiyonlari — Kalici AES Master Key (Page 15, 0x08007800)
+ *
+ * Sayfa 15 bootloader alani icinde; firmware update sadece app sayfalarini
+ * (16-126) sildigi icin bu sayfa asla bozulmaz.
+ *
+ * Sayfa duzeni:
+ *   +0  [4B] : KEY_STORE_MAGIC (0xAE5CAFE5)
+ *   +4  [32B]: master_key[32]
+ *   +36 [1B] : key_crc8 (32 byte key uzerinde basit CRC-8)
+ * ========================================================================= */
+
+/* Yerel yardimci: 8-bit CRC (polinom 0x07, SMBUS uyumlu) */
+static uint8_t keystore_crc8(const uint8_t *data, uint32_t len)
+{
+  uint8_t crc = 0xFF;
+  uint32_t i;
+  for (i = 0; i < len; i++) {
+    uint8_t j;
+    crc ^= data[i];
+    for (j = 0; j < 8; j++) {
+      if (crc & 0x80)
+        crc = (crc << 1) ^ 0x07;
+      else
+        crc <<= 1;
+    }
+  }
+  return crc;
+}
+
+/*
+ * KeyStore_Write — Yeni AES master key'i Flash'a kaydet
+ *
+ * key : 32 byte yeni AES-256 anahtari
+ *
+ * Islem:
+ *   1. Sayfa 15'i sil (0xFF ile dolar)
+ *   2. KEY_STORE_MAGIC yaz (+0)
+ *   3. 32 byte key yaz (+4)
+ *   4. CRC-8 yaz (+36)
+ */
+void KeyStore_Write(const uint8_t *key)
+{
+  uint32_t addr = KEY_STORE_ADDRESS;
+  uint32_t magic = KEY_STORE_MAGIC;
+  uint8_t crc = keystore_crc8(key, 32);
+  uint32_t i;
+
+  HAL_FLASH_Unlock();
+
+  /* Sayfa 15'i sil */
+  FLASH_EraseInitTypeDef erase;
+  erase.TypeErase   = FLASH_TYPEERASE_PAGES;
+  erase.PageAddress = KEY_STORE_ADDRESS;
+  erase.NbPages     = 1;
+  uint32_t error;
+  HAL_FLASHEx_Erase(&erase, &error);
+
+  /* MAGIC yaz (4 byte = 2 halfword) */
+  HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, addr,
+                    (uint16_t)(magic & 0xFFFF));
+  HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, addr + 2,
+                    (uint16_t)((magic >> 16) & 0xFFFF));
+
+  /* 32 byte key yaz (2 byte adimlarla) */
+  addr += 4;
+  for (i = 0; i < 32; i += 2) {
+    uint16_t hw = (uint16_t)key[i] | ((uint16_t)key[i + 1] << 8);
+    HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, addr + i, hw);
+  }
+
+  /* CRC-8 yaz (1 byte + 0xFF pad = halfword) */
+  addr += 32;
+  HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, addr,
+                    (uint16_t)crc | 0xFF00);
+
+  HAL_FLASH_Lock();
+}
+
+/*
+ * KeyStore_Read — Kayitli AES master key'i oku
+ *
+ * key_out : 32 byte cikis tamponu
+ *
+ * Donus: 1 = gecerli key bulundu ve kopyalandi
+ *         0 = KEY_STORE bos veya bozuk (DEFAULT_AES_KEY kullan)
+ */
+uint8_t KeyStore_Read(uint8_t *key_out)
+{
+  volatile uint32_t *magic_ptr = (volatile uint32_t *)KEY_STORE_ADDRESS;
+  volatile uint8_t  *key_ptr   = (volatile uint8_t *)(KEY_STORE_ADDRESS + 4);
+  volatile uint8_t  *crc_ptr   = (volatile uint8_t *)(KEY_STORE_ADDRESS + 36);
+
+  /* Magic kontrol */
+  if (magic_ptr[0] != KEY_STORE_MAGIC) {
+    return 0; /* KEY_STORE bos veya bozuk */
+  }
+
+  /* CRC-8 dogrulama */
+  uint8_t stored_crc  = *crc_ptr;
+  uint8_t local_buf[32];
+  uint32_t i;
+  for (i = 0; i < 32; i++) {
+    local_buf[i] = key_ptr[i];
+  }
+  uint8_t computed_crc = keystore_crc8(local_buf, 32);
+
+  if (computed_crc != stored_crc) {
+    return 0; /* CRC tutarsizligi — KEY_STORE bozuk */
+  }
+
+  /* Gecerli key — kopyala */
+  memcpy(key_out, local_buf, 32);
+  return 1;
 }

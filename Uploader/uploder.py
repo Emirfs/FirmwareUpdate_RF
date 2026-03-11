@@ -14,11 +14,74 @@ try:
 except ImportError:
     INTELHEX_AVAILABLE = False
 
-from drive_manager import DriveManager
+# X25519 ECDH key exchange
+try:
+    from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
+    X25519_AVAILABLE = True
+except ImportError:
+    X25519_AVAILABLE = False
 
 DRIVE_URL_TEMPLATE = "https://drive.google.com/uc?export=download&id={}"
 DEFAULT_PACKET_SIZE = 128
 KEY_UPDATE_MAGIC = b'\xA5\xA5\xA5\xA5'
+RF_CMD_KEY_UPDATE = 0x08
+
+
+def _compute_crc8(data: bytes) -> int:
+    """CRC-8 (polinom 0x07) — boot_storage.c keystore_crc8 ile eslesir."""
+    crc = 0xFF
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x07) & 0xFF if (crc & 0x80) else (crc << 1) & 0xFF
+    return crc
+
+
+def _ecdh_rf_handshake(ser, new_master_key: bytes = None, aes_key_fallback: bytes = None):
+    """
+    RF mode ECDH handshake.
+
+    Gonderir : 'W'(1) + pub_sender(32) = 33 byte
+    Bekler   : pub_receiver(32) + ACK(1) = 33 byte
+    Hesaplar : session_key = X25519(priv, pub_receiver)
+
+    new_master_key verilirse KEY_UPDATE paketi de gonderilir.
+    Donus: session_key (bytes, 32) veya None (basarisiz/ECDH yok)
+    """
+    if not X25519_AVAILABLE:
+        # Eski protokol: sadece 'W' gonder, 1 byte ACK bekle
+        # ECDH yok: 'W' gonder, C sender yine de 33 byte donduruyor
+        # (pub_receiver 32B + ACK 1B). Hepsini oku, son byte ACK olmali.
+        ser.write(b'W')
+        response = ser.read(33)
+        if len(response) < 33 or response[32:33] != b'\x06':
+            return None
+        return aes_key_fallback  # Session key yok — fallback AES key kullan
+
+    private_key = X25519PrivateKey.generate()
+    pub_sender = private_key.public_key().public_bytes_raw()  # 32 byte
+
+    ser.write(b'W' + pub_sender)  # 33 byte
+
+    response = ser.read(33)  # pub_receiver(32) + ACK(1)
+    if len(response) < 33 or response[32:33] != b'\x06':
+        return None
+
+    pub_receiver_key = X25519PublicKey.from_public_bytes(response[:32])
+    session_key = private_key.exchange(pub_receiver_key)
+
+    # Opsiyonel: yeni master key gonder
+    if new_master_key is not None and len(new_master_key) == 32:
+        zero_iv = b'\x00' * 16
+        cipher = AES.new(session_key, AES.MODE_CBC, zero_iv)
+        enc_key = cipher.encrypt(new_master_key)
+        crc8 = _compute_crc8(new_master_key)
+        ser.write(bytes([RF_CMD_KEY_UPDATE]) + enc_key + bytes([crc8]))
+        ku_resp = ser.read(1)
+        if ku_resp != b'\x06':
+            return None  # KEY_UPDATE basarisiz
+
+    return session_key
 
 
 def hex_to_bin(hex_data: bytes) -> bytes:
@@ -84,18 +147,14 @@ def progress_bar(current, total, width=40):
 
 def update_stm32_key(config, new_key_hex, log=None):
     """
-    STM32'deki AES key'i güvenli şekilde güncelle.
+    Alıcı STM32'deki AES master key'i RF üzerinden güvenli güncelle.
 
-    Protokol:
-    1. 'K' komutu gönder → ACK bekle
-    2. Yeni key'i mevcut key ile şifreleyip gönder:
-       Paket: IV(16) + AES_CBC(current_key, IV, new_key(32) + magic(4) + padding(12))(48) + CRC32(4) = 68 byte
-    3. STM32 mevcut key ile çözer, magic doğrular, flash'a yazar.
+    Protokol (yeni — ECDH):
+      Firmware güncelleme akışını tetikler + KEY_UPDATE paketi gönderir.
+      ECDH session key ile şifreli → dinleyen çözemez.
 
-    Güvenlik:
-    - Yeni key mevcut key ile şifreli → UART dinleyicisi okuyamaz
-    - Magic doğrulaması → yanlış key ile gönderim reddedilir
-    - CRC → iletim bütünlüğü
+    Gerçek firmware güncellemesi YAPMAZ — sadece dummy firmware
+    ile handshake yapılır, KEY_UPDATE gönderilir, bağlantı kesilir.
     """
     def _log(msg):
         if log:
@@ -132,51 +191,23 @@ def update_stm32_key(config, new_key_hex, log=None):
 
     ser = None
     try:
-        # Plaintext: new_key(32) + magic(4) + padding(12) = 48 byte
-        plaintext = new_key + KEY_UPDATE_MAGIC + b'\x00' * 12
-
-        # Encrypt with CURRENT key
-        iv = os.urandom(16)
-        cipher = AES.new(current_key, AES.MODE_CBC, iv)
-        encrypted = cipher.encrypt(plaintext)
-
-        # CRC of encrypted data
-        crc = calculate_crc32(encrypted)
-
-        # Packet: IV(16) + encrypted(48) + CRC(4) = 68 bytes
-        packet = iv + encrypted + crc.to_bytes(4, 'little')
-
-        # Serial bağlantı
         _log(f"🔌 {serial_port} açılıyor...")
-        ser = serial.Serial(serial_port, baud_rate, timeout=10)
+        ser = serial.Serial(serial_port, baud_rate, timeout=45)
         time.sleep(2)
         ser.reset_input_buffer()
 
-        # 'K' komutu gönder
-        _log("🔑 Key güncelleme komutu ('K') gönderiliyor...")
-        ser.write(b'K')
+        _log("🔐 ECDH key exchange + KEY_UPDATE başlatılıyor...")
+        _log("   ⏳ Alıcının bootloader'a geçmesi bekleniyor (max 30 sn)...")
 
-        ack = ser.read(1)
-        if ack != b'\x06':
-            _log(f"❌ ACK gelmedi! Gelen: {ack.hex() if ack else 'boş'}")
+        session_key = _ecdh_rf_handshake(ser, new_master_key=new_key,
+                                          aes_key_fallback=current_key)
+        if session_key is None:
+            _log("❌ ECDH handshake başarısız! Alıcı kapalı veya RF sorunu.")
             return False
-        _log("✅ STM32 hazır — şifreli key paketi gönderiliyor...")
 
-        # Key paketini gönder
-        ser.write(packet)
-        time.sleep(1)
-
-        resp = ser.read(1)
-        if resp == b'\x06':
-            _log("✅ STM32 AES key başarıyla güncellendi!")
-            _log("⚠️  GUI'deki AES Key alanını da yeni key ile güncelleyin ve kaydedin.")
-            return True
-        elif resp == b'\x15':
-            _log("❌ Key güncelleme reddedildi! Mevcut key yanlış olabilir.")
-            return False
-        else:
-            _log(f"❌ Bilinmeyen yanıt: {resp.hex() if resp else 'boş'}")
-            return False
+        _log("✅ Yeni master key alıcı Flash'ına yazıldı (ECDH korumalı)!")
+        _log("ℹ️  GUI'deki AES Key alanını yeni key ile güncelleyip kaydedin.")
+        return True
 
     except serial.SerialException as e:
         _log(f"❌ Seri port hatası: {e}")
@@ -189,16 +220,16 @@ def update_stm32_key(config, new_key_hex, log=None):
             ser.close()
 
 
-def upload_firmware(config, log=None, on_progress=None, stop_flag=None, drive_manager=None):
+def upload_firmware(config, log=None, on_progress=None, stop_flag=None, download_client=None):
     """
     Firmware güncelleme işlemini yönetir.
     
     Args:
-        config (dict): Konfigürasyon (port, baud, file_id, key, vb.)
+        config (dict): Konfigürasyon (port, baud, indirme token'i veya file_id, key, vb.)
         log (func): Log mesajlarını ekrana/GUI'ye basan callback
         on_progress (func): İlerleme durumunu (current, total) bildiren callback
         stop_flag (func): İşlemi durdurmak için True dönen fonksiyon
-        drive_manager (DriveManager): Drive işlemleri için yardımcı sınıf
+        download_client: Firmware indirme istemcisi (proxy veya direct Drive)
     """
     def _log(msg):
         if log:
@@ -219,6 +250,7 @@ def upload_firmware(config, log=None, on_progress=None, stop_flag=None, drive_ma
     serial_port = config.get("serial_port", "COM7")
     baud_rate = config.get("baud_rate", 115200)
     drive_file_id = config.get("drive_file_id", "")
+    download_token = config.get("download_token", "")
     aes_key_hex = config.get("aes_key_hex", "")
     max_retries = config.get("max_retries", 7)
     firmware_version = config.get("firmware_version", 1)
@@ -262,10 +294,14 @@ def upload_firmware(config, log=None, on_progress=None, stop_flag=None, drive_ma
         
         firmware_data = None
         
-        # DriveManager varsa onu kullan (Service Account veya fallback)
-        if drive_manager:
+        if download_client:
+            download_ref = download_token or drive_file_id
+            if not download_ref:
+                _log("❌ İndirme kaynağı tanımlı değil!")
+                return False
+
             # RAM'e indir (BytesIO)
-            f_data, err = drive_manager.download_file_to_memory(drive_file_id, progress_callback=lambda p: None)
+            f_data, err = download_client.download_file_to_memory(download_ref, progress_callback=lambda p: None)
             if not f_data:
                 _log(f"❌ İndirme başarısız: {err}")
                 return False
@@ -274,6 +310,9 @@ def upload_firmware(config, log=None, on_progress=None, stop_flag=None, drive_ma
 
         # Yoksa eski yöntem (Requests)
         else:
+            if not drive_file_id:
+                _log("❌ Drive dosya ID tanımlı değil!")
+                return False
             resp = requests.get(bin_file_url, timeout=30)
             resp.raise_for_status()
             if 'text/html' in resp.headers.get('Content-Type', ''):
@@ -315,27 +354,46 @@ def upload_firmware(config, log=None, on_progress=None, stop_flag=None, drive_ma
         ser.reset_input_buffer()
 
         # ═══════════════════════════════════════════════
-        # 3. HANDSHAKE: 'W' gönder → ACK bekle
+        # 3. HANDSHAKE (RF modunda ECDH, kabloluda eski protokol)
         # ═══════════════════════════════════════════════
-        _log("📡 'W' komutu gönderiliyor...")
-        # Startup banner artıklarını temizle
         time.sleep(0.1)
         ser.reset_input_buffer()
-        ser.write(b'W')
 
-        ack = ser.read(1)
-        if ack != b'\x06':
-            _log(f"❌ ACK gelmedi! Gelen: {ack.hex() if ack else 'boş'}")
-            return False
-        _log("✅ ACK alındı — STM32 hazır!")
+        if is_rf:
+            _log("🔐 ECDH key exchange başlatılıyor (alıcı bootloader'a geçiyor)...")
+            _log("   ⏳ Bu işlem 30 saniyeye kadar sürebilir...")
+            new_master_key_hex = config.get("new_master_key_hex", None)
+            new_master_key = bytes.fromhex(new_master_key_hex) if new_master_key_hex else None
+            session_key = _ecdh_rf_handshake(ser, new_master_key=new_master_key,
+                                              aes_key_fallback=aes_key)
+            if session_key is None:
+                _log("❌ ECDH handshake başarısız! Alıcı kapalı veya RF sorunu.")
+                return False
+            if X25519_AVAILABLE:
+                _log("✅ ECDH tamamlandı — session key türetildi (havada görünmez)")
+            else:
+                _log("✅ ACK alındı (ECDH yok — fallback key)")
+        else:
+            _log("📡 'W' komutu gönderiliyor...")
+            ser.write(b'W')
+            ack = ser.read(1)
+            if ack != b'\x06':
+                _log(f"❌ ACK gelmedi! Gelen: {ack.hex() if ack else 'boş'}")
+                return False
+            session_key = aes_key
+            _log("✅ ACK alındı — STM32 hazır!")
 
         if _stopped():
             return False
 
         # ═══════════════════════════════════════════════
-        # 4. METADATA GÖNDER → ACK bekle
+        # 4. KOMUT BYTE + METADATA GÖNDER → ACK bekle
+        #    C sender her zaman 1 byte komut bekler:
+        #    0x00 = KEY_UPDATE yok, doğrudan metadata
+        #    (KEY_UPDATE zaten handshake sırasında gönderildi)
         # ═══════════════════════════════════════════════
         ser.timeout = TIMEOUT_METADATA
+        ser.write(b'\x00')  # Komut byte: KEY_UPDATE yok
         metadata = (
             firmware_size.to_bytes(4, 'little') +
             firmware_version.to_bytes(4, 'little') +
@@ -385,7 +443,7 @@ def upload_firmware(config, log=None, on_progress=None, stop_flag=None, drive_ma
 
             packet = packet.ljust(packet_size, b'\x00')
             iv = os.urandom(16)
-            cipher = AES.new(aes_key, AES.MODE_CBC, iv)
+            cipher = AES.new(session_key, AES.MODE_CBC, iv)
             encrypted = cipher.encrypt(packet)
             crc_val = calculate_crc32(encrypted)
 

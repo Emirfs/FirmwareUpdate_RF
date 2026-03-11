@@ -29,6 +29,8 @@
 
 #include "sender_fw_update.h"
 
+#include "c25519.h"
+#include "entropy.h"
 #include "iwdg.h"
 #include "rf_protocol.h"
 #include "sender_rf_link.h"
@@ -53,37 +55,53 @@ void FirmwareUpdate_Mode(void) {
 
   HAL_GPIO_WritePin(LED0_GPIO_Port, LED0_Pin, GPIO_PIN_SET); // LED0 yak: FW update aktif
 
+  /* ── ECDH: pub_sender'i PC'den al ──────────────────────────────────────
+   * Yeni UART protokolu: PC 'W'(1) + pub_sender(32) = 33 byte gonderir.
+   * pub_sender: Python tarafinda uretilen X25519 public key.
+   * Eski protokol ('W' tek byte): pub_sender alanamazsa fallback. */
+  uint8_t pub_sender[32] = {0};
+  uint8_t uart_start_buf[UART_FW_START_SIZE]; /* 'W' + pub_sender */
+
+  /* Ilk byte'i zaten main.c okumuş ('W'), kalan 32 byte'i oku */
+  if (HAL_UART_Receive(&huart1, pub_sender, 32, 500) != HAL_OK) {
+    /* Eski protokol / pub_sender gelmedi — pub_sender sifir kalir */
+    Print("[FW] pub_sender alinamadi, eski protokol!\r\n");
+  }
+  (void)uart_start_buf; /* Kullanilmadi — suppress warning */
+
   Print("[FW] Aliciya BOOT_REQUEST gonderiliyor...\r\n");
 
   /* ===================================================================
-   * ADIM 1: BOOT_REQUEST -> BOOT_ACK
-   * Alici cihazi bootloader moduna almak icin BOOT_REQUEST gonder.
-   * Alici BOOT_ACK donene veya 30 saniye gecene kadar tekrarla.
+   * ADIM 1: BOOT_REQUEST -> BOOT_ACK (ECDH Key Exchange)
    *
-   * BOOT_ACK payload (4 byte, little-endian): resume_start_packet
-   *   - 0  : ilk transfer, bastan basla
-   *   - N>0: onceki transfer N. pakete kadar basariliydi, N'den devam et
+   * Yeni BOOT_REQUEST payload (32 byte): [pub_sender:32]
+   * Yeni BOOT_ACK payload (36 byte):     [resume_start:4][pub_receiver:32]
+   *
+   * Alici BOOT_ACK ile kendi public key'ini gonderir.
+   * Biz pub_receiver'i PC'ye iletiyoruz; PC session key'i hesaplar.
    * =================================================================== */
   uint8_t boot_ack_received = 0;
   uint32_t boot_start = HAL_GetTick();
+  uint8_t pub_receiver[32] = {0};
 
   while (!boot_ack_received && (HAL_GetTick() - boot_start) < 30000) {
     HAL_IWDG_Refresh(&hiwdg); // Watchdog'u sifirla — loop uzun surebilir
 
-    RF_SendPacket(RF_CMD_BOOT_REQUEST, rf_seq_counter, NULL, 0); // BOOT_REQUEST gonder
+    /* BOOT_REQUEST gonder: payload = pub_sender (32 byte) */
+    RF_SendPacket(RF_CMD_BOOT_REQUEST, rf_seq_counter, pub_sender,
+                  BOOT_REQUEST_PLD_SIZE);
 
     /* 2 saniye BOOT_ACK bekle */
     if (RF_WaitForPacket(&rx_type, &rx_seq, rx_pld, &rx_pld_len, 2000)) {
-      if (rx_type == RF_CMD_BOOT_ACK) {
+      if (rx_type == RF_CMD_BOOT_ACK && rx_pld_len >= BOOT_ACK_PLD_SIZE) {
         boot_ack_received = 1;
 
-        /* BOOT_ACK payload'indan resume noktasini oku (4 byte, little-endian) */
-        if (rx_pld_len >= 4) {
-          resume_start_packet = (uint32_t)rx_pld[0]
-                              | ((uint32_t)rx_pld[1] << 8)
-                              | ((uint32_t)rx_pld[2] << 16)
-                              | ((uint32_t)rx_pld[3] << 24);
-        }
+        /* BOOT_ACK payload: [resume_start:4][pub_receiver:32] */
+        resume_start_packet = (uint32_t)rx_pld[0]
+                            | ((uint32_t)rx_pld[1] << 8)
+                            | ((uint32_t)rx_pld[2] << 16)
+                            | ((uint32_t)rx_pld[3] << 24);
+        memcpy(pub_receiver, &rx_pld[4], 32);
 
         if (resume_start_packet > 0) {
           Print("[FW] Resume: ");
@@ -107,46 +125,93 @@ void FirmwareUpdate_Mode(void) {
     return;
   }
 
-  /* Alici hazir — PC'ye ACK gonder, PC metadata gondermesini bekliyor */
-  HAL_UART_Transmit(&huart1, &ack, 1, 100);
+  /* Alici hazir — PC'ye pub_receiver(32) + ACK(1) gonder
+   * PC bu bilgiyle session key'i hesaplar ve firmware'i sifrelr. */
+  HAL_UART_Transmit(&huart1, pub_receiver, 32, 200); /* pub_receiver */
+  HAL_UART_Transmit(&huart1, &ack, 1, 100);           /* ACK */
 
   /* ===================================================================
-   * ADIM 2: METADATA AL -> RF ILE GONDER
-   * PC'den 12 byte metadata bekle:
-   *   [firmware_size:4][firmware_version:4][firmware_crc32:4]
-   * Alininca RF uzerinden aliciya ilet, ACK bekle.
+   * ADIM 1b: KOMUT BYTE'I + OPSİYONEL KEY_UPDATE + METADATA
+   *
+   * Python her zaman 1 byte komut gönderir:
+   *   0x00 = KEY_UPDATE yok, doğrudan metadata (12 byte) izler
+   *   0x08 = KEY_UPDATE var (33 byte), sonra metadata (12 byte) + ACK bekle
+   *
+   * Bu tasarım, metadata'nın ilk byte'ının 0x08 olması riskini ortadan kaldırır.
    * =================================================================== */
-  uint8_t meta_buf[12];
-  if (HAL_UART_Receive(&huart1, meta_buf, 12, 10000) != HAL_OK) {
-    Print("[FW] HATA: Metadata alinamadi!\r\n");
-    HAL_UART_Transmit(&huart1, &nack, 1, 100);
-    return;
-  }
-
-  Print("[FW] Metadata alindi, RF ile gonderiliyor...\r\n");
-
-  uint8_t meta_sent = 0;
-  for (uint8_t retry = 0; retry < RF_MAX_RETRIES && !meta_sent; retry++) {
-    RF_SendPacket(RF_CMD_METADATA, rf_seq_counter, meta_buf, 12); // Metadata gonder
-
-    /* 3 saniye ACK bekle */
-    if (RF_WaitForPacket(&rx_type, &rx_seq, rx_pld, &rx_pld_len, 3000)) {
-      if (rx_type == RF_CMD_ACK) {
-        meta_sent = 1;
-      }
+  {
+    uint8_t cmd_byte = 0;
+    if (HAL_UART_Receive(&huart1, &cmd_byte, 1, 10000) != HAL_OK) {
+      Print("[FW] HATA: Komut byte'i alinamadi!\r\n");
+      HAL_UART_Transmit(&huart1, &nack, 1, 100);
+      return;
     }
-    HAL_IWDG_Refresh(&hiwdg);
-  }
-  rf_seq_counter++; // Sequence numarasini artir (her "islem" icin bir artis)
 
-  if (!meta_sent) {
-    Print("[FW] HATA: Metadata gonderilemedi!\r\n");
-    HAL_UART_Transmit(&huart1, &nack, 1, 100);
-    return;
+    if (cmd_byte == RF_CMD_KEY_UPDATE) {
+      /* KEY_UPDATE paketi al ve RF ile ileri gonder */
+      uint8_t ku_payload[KEY_UPDATE_PLD_SIZE]; /* enc_key(32) + crc8(1) */
+      if (HAL_UART_Receive(&huart1, ku_payload, KEY_UPDATE_PLD_SIZE, 5000) != HAL_OK) {
+        Print("[FW] HATA: KEY_UPDATE payload alinamadi!\r\n");
+        HAL_UART_Transmit(&huart1, &nack, 1, 100);
+        return;
+      }
+
+      uint8_t ku_sent = 0;
+      for (uint8_t retry = 0; retry < RF_MAX_RETRIES && !ku_sent; retry++) {
+        RF_SendPacket(RF_CMD_KEY_UPDATE, rf_seq_counter, ku_payload,
+                      KEY_UPDATE_PLD_SIZE);
+        if (RF_WaitForPacket(&rx_type, &rx_seq, rx_pld, &rx_pld_len, 3000)) {
+          if (rx_type == RF_CMD_KEY_UPDATE_ACK) {
+            ku_sent = 1;
+          }
+        }
+        HAL_IWDG_Refresh(&hiwdg);
+      }
+      rf_seq_counter++;
+      HAL_UART_Transmit(&huart1, ku_sent ? &ack : &nack, 1, 100);
+      if (!ku_sent) {
+        Print("[FW] HATA: KEY_UPDATE gonderilemedi!\r\n");
+        return;
+      }
+      Print("[FW] Master key guncellendi!\r\n");
+    }
+    /* cmd_byte == 0x00 veya baska deger: KEY_UPDATE yok, doğrudan metadata */
+
+    /* 12 byte metadata al ve RF ile ilet */
+    uint8_t meta_buf[12];
+    if (HAL_UART_Receive(&huart1, meta_buf, 12, 10000) != HAL_OK) {
+      Print("[FW] HATA: Metadata alinamadi!\r\n");
+      HAL_UART_Transmit(&huart1, &nack, 1, 100);
+      return;
+    }
+
+    Print("[FW] Metadata alindi, RF ile gonderiliyor...\r\n");
+
+    uint8_t meta_sent = 0;
+    for (uint8_t retry = 0; retry < RF_MAX_RETRIES && !meta_sent; retry++) {
+      RF_SendPacket(RF_CMD_METADATA, rf_seq_counter, meta_buf, 12);
+      if (RF_WaitForPacket(&rx_type, &rx_seq, rx_pld, &rx_pld_len, 3000)) {
+        if (rx_type == RF_CMD_ACK) {
+          meta_sent = 1;
+        }
+      }
+      HAL_IWDG_Refresh(&hiwdg);
+    }
+    rf_seq_counter++;
+
+    if (!meta_sent) {
+      Print("[FW] HATA: Metadata gonderilemedi!\r\n");
+      HAL_UART_Transmit(&huart1, &nack, 1, 100);
+      return;
+    }
+    HAL_UART_Transmit(&huart1, &ack, 1, 100);
   }
 
-  /* Metadata iletildi — PC'ye ACK */
-  HAL_UART_Transmit(&huart1, &ack, 1, 100);
+  /* ===================================================================
+   * [ESKİ ADIM 2 ARTIK YUKARIDA ENTEGRE]
+   * ADIM 2: METADATA AL -> RF ILE GONDER
+   * Bu adim yukaridaki ADIM 1b blogu ile entegre edildi.
+   * =================================================================== */
 
   /* ===================================================================
    * ADIM 3: ALICI HAZIR BİLDİRİMİ (FLASH_ERASE_DONE)
@@ -265,9 +330,12 @@ void FirmwareUpdate_Mode(void) {
     }
 
     if (!all_chunks_ok) {
-      /* Herhangi bir chunk basarisiz — PC'ye NACK */
+      /* Herhangi bir chunk basarisiz — PC'ye NACK gonder, DEVAM ET.
+       * return YOK: FirmwareUpdate_Mode'dan cikmiyoruz.
+       * Python ayni 148 byte'i tekrar gonderecek (retry dongusu),
+       * biz de sonraki UART aliminda onu isleyecegiz. */
       HAL_UART_Transmit(&huart1, &nack, 1, 100);
-      return;
+      continue; /* while(1) dongusunun basina don — PC'den yeni paket bekle */
     }
 
     packets_sent++;

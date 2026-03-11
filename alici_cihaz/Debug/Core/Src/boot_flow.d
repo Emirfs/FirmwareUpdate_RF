@@ -1,6 +1,7 @@
 Core/Src/boot_flow.o: ../Core/Src/boot_flow.c ../Core/Inc/boot_flow.h \
  ../Core/Inc/boot_led.h ../Core/Inc/boot_rf.h ../Core/Inc/boot_storage.h \
- ../Core/Inc/aes.h ../Core/Inc/iwdg.h ../Core/Inc/main.h \
+ ../Core/Inc/aes.h ../Core/Inc/c25519.h ../Core/Inc/f25519.h \
+ ../Core/Inc/entropy.h ../Core/Inc/iwdg.h ../Core/Inc/main.h \
  ../Drivers/STM32F0xx_HAL_Driver/Inc/stm32f0xx_hal.h \
  ../Core/Inc/stm32f0xx_hal_conf.h \
  ../Drivers/STM32F0xx_HAL_Driver/Inc/stm32f0xx_hal_rcc.h \
@@ -40,6 +41,9 @@ Core/Src/boot_flow.o: ../Core/Src/boot_flow.c ../Core/Inc/boot_flow.h \
 ../Core/Inc/boot_rf.h:
 ../Core/Inc/boot_storage.h:
 ../Core/Inc/aes.h:
+../Core/Inc/c25519.h:
+../Core/Inc/f25519.h:
+../Core/Inc/entropy.h:
 ../Core/Inc/iwdg.h:
 ../Core/Inc/main.h:
 ../Drivers/STM32F0xx_HAL_Driver/Inc/stm32f0xx_hal.h:

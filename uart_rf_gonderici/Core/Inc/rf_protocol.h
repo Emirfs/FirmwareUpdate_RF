@@ -20,6 +20,8 @@
 #define RF_CMD_FLASH_ERASE_DONE 0x05
 #define RF_CMD_UPDATE_COMPLETE 0x06
 #define RF_CMD_UPDATE_FAILED 0x07
+#define RF_CMD_KEY_UPDATE 0x08        // Gonderici → Alici: Yeni master key
+#define RF_CMD_KEY_UPDATE_ACK 0x09    // Alici → Gonderici: Key yazildi
 #define RF_CMD_ACK 0x10
 #define RF_CMD_NACK 0x11
 #define RF_CMD_PING 0x12
@@ -31,7 +33,17 @@
 #define RF_CHUNK_DATA_SIZE 48
 #define RF_CHUNKS_PER_PACKET 4 // 148 byte → 4 RF parça (48+48+48+4)
 
+// ECDH sabitleri
+#define ECDH_KEY_SIZE          32U  // X25519 public/private key boyutu
+#define BOOT_REQUEST_PLD_SIZE  32U  // BOOT_REQUEST payload: [pub_sender:32]
+#define BOOT_ACK_PLD_SIZE      36U  // BOOT_ACK payload: [resume_start:4][pub_receiver:32]
+#define KEY_UPDATE_PLD_SIZE    33U  // KEY_UPDATE payload: [enc_key:32][crc8:1]
+
 // UART firmware update sabitleri
+// Yeni UART handshake: 'W'(1) + pub_sender(32) = 33 byte gonderilir
+// Cevap: pub_receiver(32) + ACK(1) = 33 byte alinir
+#define UART_FW_START_SIZE     33U  // 'W' + pub_sender
+#define UART_FW_ACK_SIZE       33U  // pub_receiver + ACK
 #define UART_ACK 0x06
 #define UART_NACK 0x15
 #define FW_PACKET_SIZE 128      // Python'dan gelen şifreli paket boyutu

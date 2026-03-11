@@ -1,0 +1,13 @@
+../Core/Inc/f25519.h:20:20:f25519_copy	1
+../Core/Src/f25519.c:12:6:f25519_load	3
+../Core/Src/f25519.c:23:6:f25519_normalize	3
+../Core/Src/f25519.c:50:9:f25519_eq	2
+../Core/Src/f25519.c:62:6:f25519_select	2
+../Core/Src/f25519.c:72:6:f25519_add	3
+../Core/Src/f25519.c:93:6:f25519_sub	3
+../Core/Src/f25519.c:116:6:f25519_neg	3
+../Core/Src/f25519.c:139:6:f25519_mul__distinct	5
+../Core/Src/f25519.c:164:6:f25519_mul	1
+../Core/Src/f25519.c:171:6:f25519_mul_c	3
+../Core/Src/f25519.c:193:6:f25519_inv__distinct	2
+../Core/Src/f25519.c:222:6:f25519_inv	1

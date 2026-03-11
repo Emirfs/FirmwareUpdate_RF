@@ -1,5 +1,6 @@
 Core/Src/sender_fw_update.o: ../Core/Src/sender_fw_update.c \
- ../Core/Inc/sender_fw_update.h ../Core/Inc/iwdg.h ../Core/Inc/main.h \
+ ../Core/Inc/sender_fw_update.h ../Core/Inc/c25519.h ../Core/Inc/f25519.h \
+ ../Core/Inc/entropy.h ../Core/Inc/iwdg.h ../Core/Inc/main.h \
  ../Drivers/STM32F0xx_HAL_Driver/Inc/stm32f0xx_hal.h \
  ../Core/Inc/stm32f0xx_hal_conf.h \
  ../Drivers/STM32F0xx_HAL_Driver/Inc/stm32f0xx_hal_rcc.h \
@@ -36,6 +37,9 @@ Core/Src/sender_fw_update.o: ../Core/Src/sender_fw_update.c \
  ../Core/Inc/sender_state.h ../Core/Inc/rf_protocol.h \
  ../Core/Inc/sender_uart_debug.h ../Core/Inc/usart.h
 ../Core/Inc/sender_fw_update.h:
+../Core/Inc/c25519.h:
+../Core/Inc/f25519.h:
+../Core/Inc/entropy.h:
 ../Core/Inc/iwdg.h:
 ../Core/Inc/main.h:
 ../Drivers/STM32F0xx_HAL_Driver/Inc/stm32f0xx_hal.h:

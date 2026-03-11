@@ -60,6 +60,15 @@ except ImportError:
     print("pycryptodome gerekli: pip install pycryptodome")
     sys.exit(1)
 
+# X25519 ECDH key exchange
+try:
+    from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+    X25519_AVAILABLE = True
+except ImportError:
+    X25519_AVAILABLE = False
+    print("[UYARI] 'cryptography' paketi yok: pip install cryptography")
+    print("         ECDH key exchange devre disi — sabit AES key kullanilir.")
+
 try:
     from intelhex import IntelHex
     INTELHEX_AVAILABLE = True
@@ -73,6 +82,82 @@ except ImportError:
 
 # Sifreli firmware paketi boyutu: sifresiz 128 byte blok boyutu
 DEFAULT_PACKET_SIZE = 128
+
+# RF komut byte'ları (rf_protocol.h ile aynı)
+RF_CMD_KEY_UPDATE = 0x08
+
+
+def compute_crc8(data: bytes) -> int:
+    """CRC-8 (polinom 0x07, SMBUS uyumlu) — boot_storage.c keystore_crc8 ile aynı."""
+    crc = 0xFF
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):
+            if crc & 0x80:
+                crc = ((crc << 1) ^ 0x07) & 0xFF
+            else:
+                crc = (crc << 1) & 0xFF
+    return crc
+
+
+def ecdh_key_exchange(ser, new_master_key: bytes = None):
+    """
+    X25519 ECDH key exchange — gönderici STM32 üzerinden alıcı ile.
+
+    1. Ephemeral X25519 key pair üret (priv + pub_sender)
+    2. UART'a 'W' + pub_sender (33 byte) gönder
+    3. UART'tan pub_receiver (32 byte) + ACK (1 byte) bekle
+    4. session_key = X25519(priv, pub_receiver)
+    5. new_master_key varsa KEY_UPDATE gönder
+
+    Döndürür: (session_key: bytes, aes_key_bytes: bytes)
+      - session_key   : 32 byte, firmware şifreleme için
+      - aes_key_bytes : aes_key_hex'ten dönüştürülmüş (artık kullanılmaz, sadece fallback)
+    """
+    if not X25519_AVAILABLE:
+        return None
+
+    # Ephemeral key pair üret
+    private_key = X25519PrivateKey.generate()
+    pub_sender_bytes = private_key.public_key().public_bytes_raw()  # 32 byte
+
+    # 'W' + pub_sender gönder
+    ser.write(b'W' + pub_sender_bytes)  # 33 byte
+
+    # pub_receiver (32B) + ACK (1B) oku — 45 saniye timeout
+    response = ser.read(33)
+    if len(response) < 33:
+        return None
+
+    pub_receiver_bytes = response[:32]
+    ack_byte = response[32:33]
+
+    if ack_byte != b'\x06':
+        return None
+
+    # Session key hesapla: X25519(priv, pub_receiver)
+    from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PublicKey
+    pub_receiver_key = X25519PublicKey.from_public_bytes(pub_receiver_bytes)
+    session_key = private_key.exchange(pub_receiver_key)  # 32 byte shared secret
+
+    # Opsiyonel: yeni master key gönder
+    if new_master_key is not None:
+        if len(new_master_key) != 32:
+            raise ValueError("new_master_key 32 byte olmalı")
+        # Yeni key'i session_key ile AES-CBC (IV=0) şifrele
+        zero_iv = b'\x00' * 16
+        cipher = AES.new(session_key, AES.MODE_CBC, zero_iv)
+        encrypted_new_key = cipher.encrypt(new_master_key)  # 32 byte
+        crc8_val = compute_crc8(new_master_key)
+        ku_payload = encrypted_new_key + bytes([crc8_val])  # 33 byte
+
+        # KEY_UPDATE_CMD + payload → UART (C sender RF'e iletecek)
+        ser.write(bytes([RF_CMD_KEY_UPDATE]) + ku_payload)  # 34 byte
+        ku_resp = ser.read(1)
+        if ku_resp != b'\x06':
+            raise RuntimeError(f"KEY_UPDATE reddedildi: {ku_resp.hex() if ku_resp else 'timeout'}")
+
+    return session_key
 
 # RF modu timeout'lari — UART dogrudan baglantisindan cok daha uzun
 # Cunku her paketin 4 RF chunk gonderimi + ACK bekleme suresi var
@@ -193,26 +278,37 @@ def upload_firmware_rf(config, log=None, on_progress=None, stop_flag=None):
         return stop_flag() if stop_flag else False
 
     # ─── CONFIG PARAMETRELERI ───────────────────────────────────────────
-    serial_port      = config.get("serial_port", "COM7")       # Gonderici bagli port
-    baud_rate        = config.get("baud_rate", 115200)          # UART hizi
-    aes_key_hex      = config.get("aes_key_hex", "")           # 32 byte = 64 hex karakter
-    firmware_version = config.get("firmware_version", 1)       # Versiyon numarasi
-    packet_size      = config.get("packet_size", DEFAULT_PACKET_SIZE)  # 128 byte
-    firmware_file    = config.get("firmware_file", "")         # .bin veya .hex dosya yolu
-    file_type        = config.get("file_type", "BIN").upper()  # "BIN" veya "HEX"
+    serial_port      = config.get("serial_port", "COM7")
+    baud_rate        = config.get("baud_rate", 115200)
+    aes_key_hex      = config.get("aes_key_hex", "")
+    firmware_version = config.get("firmware_version", 1)
+    packet_size      = config.get("packet_size", DEFAULT_PACKET_SIZE)
+    firmware_file    = config.get("firmware_file", "")
+    file_type        = config.get("file_type", "BIN").upper()
+    new_master_key_hex = config.get("new_master_key_hex", None)  # Opsiyonel key guncelleme
 
-    # AES key donusumu: hex string → bytes
-    # Ornek: "3132...3132" (64 hex karakter) → b'1234...12' (32 byte)
+    # Fallback AES key (ECDH basarisiz olursa kullanilir)
     try:
         aes_key = bytes.fromhex(aes_key_hex)
         if len(aes_key) != 32:
             _log("AES key 32 byte (64 hex karakter) olmalidir!")
             return False
     except ValueError:
-        # Hex degil, ASCII string olarak dene (gelistirme/test icin)
         aes_key = aes_key_hex.encode('utf-8')
         if len(aes_key) != 32:
             _log("AES key 32 byte olmalidir!")
+            return False
+
+    # Yeni master key (--new-master-key ile)
+    new_master_key = None
+    if new_master_key_hex:
+        try:
+            new_master_key = bytes.fromhex(new_master_key_hex)
+            if len(new_master_key) != 32:
+                _log("--new-master-key 32 byte (64 hex karakter) olmalidir!")
+                return False
+        except ValueError:
+            _log("--new-master-key gecersiz hex string!")
             return False
 
     ser = None
@@ -266,32 +362,46 @@ def upload_firmware_rf(config, log=None, on_progress=None, stop_flag=None):
         ser.reset_input_buffer()
 
         # ═══════════════════════════════════════════════
-        # 3. HANDSHAKE: 'W' gönder → ACK bekle
-        #    Gönderici BOOT_REQUEST gönderir, alıcı bootloader'a geçer
+        # 3. ECDH HANDSHAKE + BOOT
+        #    'W' + pub_sender → pub_receiver + ACK
+        #    Session key türetilir — firmware bu key ile şifrelenir
         # ═══════════════════════════════════════════════
-        _log("📡 'W' komutu gönderiliyor (alıcı bootloader'a geçiyor)...")
+        _log("🔐 ECDH key exchange başlatılıyor...")
         _log("   ⏳ Bu işlem 30 saniyeye kadar sürebilir...")
-        
-        ser.write(b'W')
 
-        ack = ser.read(1)
-        if ack != b'\x06':
-            _log(f"❌ ACK gelmedi! Gelen: {ack.hex() if ack else 'boş'}")
-            _log("   Olası sebepler:")
-            _log("   - Alıcı cihaz kapalı veya menzil dışı")
-            _log("   - Gönderici Si4432 sorunu")
-            _log("   - COM port yanlış")
-            return False
-        _log("✅ Alıcı bootloader'a geçti! RF bağlantı aktif.")
+        session_key = ecdh_key_exchange(ser, new_master_key=new_master_key)
+
+        if session_key is None:
+            if not X25519_AVAILABLE:
+                # ECDH yok: 'W' gonder, C sender 33 byte donduruyor (pub_receiver+ACK)
+                _log("⚠️  ECDH yok — sabit AES key ile devam ediliyor")
+                ser.write(b'W')
+                response = ser.read(33)  # pub_receiver(32) + ACK(1)
+                if len(response) < 33 or response[32:33] != b'\x06':
+                    _log(f"❌ ACK gelmedi!")
+                    return False
+                session_key = aes_key  # Fallback
+            else:
+                _log("❌ ECDH handshake başarısız!")
+                _log("   Olası sebepler: alıcı kapalı, RF sorunu, eski firmware")
+                return False
+        else:
+            _log("✅ ECDH tamamlandı — session key türetildi (havada görünmez)")
+            if new_master_key:
+                _log("✅ Master key güncellendi ve alıcı Flash'a yazdı")
 
         if _stopped():
             return False
 
         # ═══════════════════════════════════════════════
-        # 4. METADATA GÖNDER → ACK bekle
+        # 4. KOMUT BYTE + METADATA GÖNDER → ACK bekle
+        #    C sender her zaman 1 byte komut bekler:
+        #    0x00 = KEY_UPDATE yok, 0x08 = KEY_UPDATE var
+        #    KEY_UPDATE zaten handshake'te gönderildi → 0x00 göndeririz
         # ═══════════════════════════════════════════════
         ser.timeout = RF_METADATA_TIMEOUT
-        
+        ser.write(b'\x00')  # Komut byte: KEY_UPDATE yok
+
         metadata = (
             firmware_size.to_bytes(4, 'little') +
             firmware_version.to_bytes(4, 'little') +
@@ -346,15 +456,12 @@ def upload_firmware_rf(config, log=None, on_progress=None, stop_flag=None):
             # Son paket kisaysa null ile tamamla (padding)
             packet = packet.ljust(packet_size, b'\x00')
 
-            # AES-256-CBC sifreleme:
-            #   iv        : Her paket icin 16 byte rastgele (os.urandom)
-            #   encrypted : 128 byte sifrelenmis firmware blogu
-            #   crc_val   : Sifrelenmis verinin CRC-32 (bozulma tespiti)
-            # Gonderilecek: [IV:16][Encrypted:128][CRC32:4] = 148 byte
-            iv = os.urandom(16)                        # Rastgele IV
-            cipher = AES.new(aes_key, AES.MODE_CBC, iv)
-            encrypted = cipher.encrypt(packet)         # 128 byte sifreli veri
-            crc_val = calculate_crc32(encrypted)       # Sifreli verinin CRC'si
+            # AES-256-CBC sifreleme — session_key (ECDH shared secret) ile
+            # Her paket icin rastgele IV (16 byte) kullanilir
+            iv = os.urandom(16)
+            cipher = AES.new(session_key, AES.MODE_CBC, iv)
+            encrypted = cipher.encrypt(packet)
+            crc_val = calculate_crc32(encrypted)
 
             # 148 byte'lik tam paket olustur
             payload = iv + encrypted + crc_val.to_bytes(4, 'little')
@@ -454,12 +561,15 @@ if __name__ == "__main__":
     parser.add_argument("--baud", type=int, default=115200, help="Baud rate (varsayılan: 115200)")
     parser.add_argument("--version", type=int, default=1, help="Firmware versiyonu (varsayılan: 1)")
     parser.add_argument("--key", default="3132333435363738393031323334353637383930313233343536373839303132",
-                       help="AES-256 key (hex string, 64 karakter)")
+                       help="Fallback AES-256 key (ECDH yoksa kullanilir, hex 64 kar)")
     parser.add_argument("--type", choices=["BIN", "HEX"], default="BIN",
                        help="Dosya formatı (varsayılan: BIN)")
-    
+    parser.add_argument("--new-master-key", default=None, dest="new_master_key",
+                       help="Alıcıya yeni kalıcı AES master key yaz (hex 64 karakter). "
+                            "ECDH session key ile şifreli gönderilir.")
+
     args = parser.parse_args()
-    
+
     config = {
         "serial_port": args.port,
         "baud_rate": args.baud,
@@ -468,13 +578,16 @@ if __name__ == "__main__":
         "firmware_version": args.version,
         "file_type": args.type,
         "packet_size": DEFAULT_PACKET_SIZE,
+        "new_master_key_hex": args.new_master_key,
     }
-    
+
     print(f"\n{'='*50}")
-    print(f"  RF Firmware Uploader")
+    print(f"  RF Firmware Uploader (ECDH {'aktif' if X25519_AVAILABLE else 'yok — fallback'})")
     print(f"  Port: {args.port} @ {args.baud}")
     print(f"  Dosya: {args.firmware_file}")
     print(f"  Versiyon: {args.version}")
+    if args.new_master_key:
+        print(f"  Master Key Guncelleme: AKTIF")
     print(f"{'='*50}\n")
     
     success = upload_firmware_rf(config)

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(python3 -c \"from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey; k=X25519PrivateKey.generate\\(\\); print\\(''X25519 OK''\\)\")",
+      "Bash(py -c \"from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey; k=X25519PrivateKey.generate\\(\\); print\\(''X25519 OK''\\)\")"
+    ]
+  }
+}

@@ -9,6 +9,7 @@ a = Analysis(
     hiddenimports=[
         'config_manager',
         'drive_manager',
+        'firmware_proxy_client',
         'intelhex',
         'PySide6.QtUiTools',
         'PySide6.QtCore',

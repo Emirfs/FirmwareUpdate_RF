@@ -1,2 +1,3 @@
-../Core/Src/boot_flow.c:98:6:jump_to_application	4
-../Core/Src/boot_flow.c:164:6:Bootloader_Main	33
+../Core/Inc/c25519.h:30:20:c25519_prepare	1
+../Core/Src/boot_flow.c:99:6:jump_to_application	4
+../Core/Src/boot_flow.c:166:6:Bootloader_Main	48

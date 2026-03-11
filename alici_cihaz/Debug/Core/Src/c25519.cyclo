@@ -1,0 +1,5 @@
+../Core/Inc/f25519.h:20:20:f25519_copy	1
+../Core/Src/c25519.c:22:13:xc_double	1
+../Core/Src/c25519.c:47:13:xc_diffadd	1
+../Core/Src/c25519.c:82:13:projective_ladder	2
+../Core/Src/c25519.c:111:6:c25519_smult	1

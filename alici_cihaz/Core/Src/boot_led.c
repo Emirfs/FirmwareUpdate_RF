@@ -27,49 +27,49 @@
 
 /* Turuncu — bootloader aktif, gonderici bekleniyor */
 void LED_Bootloader(void) {
-  NeoPixel_SetAll(255, 80, 0);
-  NeoPixel_Show();
+	NeoPixel_SetAll(255, 80, 0);
+	NeoPixel_Show();
 }
 
 /* Kirmizi yanip sonme (5 kez) — hata durumu */
 void LED_Error(void) {
-  for (int i = 0; i < 5; i++) {
-    NeoPixel_SetAll(255, 0, 0); // Kirmizi
-    NeoPixel_Show();
-    HAL_Delay(150);
-    NeoPixel_Clear();           // Kapat
-    NeoPixel_Show();
-    HAL_Delay(150);
-    HAL_IWDG_Refresh(&hiwdg);   // Uzun yanip sonme icin watchdog sifirla
-  }
+	for (int i = 0; i < 5; i++) {
+		NeoPixel_SetAll(255, 0, 0); // Kirmizi
+		NeoPixel_Show();
+		HAL_Delay(150);
+		NeoPixel_Clear();           // Kapat
+		NeoPixel_Show();
+		HAL_Delay(150);
+		HAL_IWDG_Refresh(&hiwdg);   // Uzun yanip sonme icin watchdog sifirla
+	}
 }
 
 /* Yesil yanip sonme (3 kez) — basarili guncelleme */
 void LED_Success(void) {
-  for (int i = 0; i < 3; i++) {
-    NeoPixel_SetAll(0, 255, 0); // Yesil
-    NeoPixel_Show();
-    HAL_Delay(200);
-    NeoPixel_Clear();
-    NeoPixel_Show();
-    HAL_Delay(200);
-    HAL_IWDG_Refresh(&hiwdg);
-  }
+	for (int i = 0; i < 3; i++) {
+		NeoPixel_SetAll(0, 255, 0); // Yesil
+		NeoPixel_Show();
+		HAL_Delay(200);
+		NeoPixel_Clear();
+		NeoPixel_Show();
+		HAL_Delay(200);
+		HAL_IWDG_Refresh(&hiwdg);
+	}
 }
 
 /* Mavi/mor renk degistirme — firmware transfer ilerlemesi
  * packet_num cift: mavi, tek: mor → gorunur gecisin gostergesi */
 void LED_Transfer(uint32_t packet_num) {
-  if (packet_num % 2 == 0) {
-    NeoPixel_SetAll(0, 0, 200);    // Mavi (cift paket)
-  } else {
-    NeoPixel_SetAll(128, 0, 200);  // Mor (tek paket)
-  }
-  NeoPixel_Show();
+	if (packet_num % 2 == 0) {
+		NeoPixel_SetAll(0, 0, 200);    // Mavi (cift paket)
+	} else {
+		NeoPixel_SetAll(128, 0, 200);  // Mor (tek paket)
+	}
+	NeoPixel_Show();
 }
 
 /* Tum LED'leri kapat */
 void LED_Off(void) {
-  NeoPixel_Clear();
-  NeoPixel_Show();
+	NeoPixel_Clear();
+	NeoPixel_Show();
 }
