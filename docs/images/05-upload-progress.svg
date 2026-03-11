@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900">
-  <rect width="1600" height="900" fill="#0b1419"/>
-  <rect x="40" y="40" width="1520" height="820" rx="28" fill="#17252c" stroke="#38bdf8" stroke-width="4"/>
-  <text x="800" y="320" fill="#ffffff" font-family="Segoe UI, Arial, sans-serif" font-size="52" text-anchor="middle">PLACEHOLDER SCREENSHOT 05</text>
-  <text x="800" y="410" fill="#a4d8eb" font-family="Segoe UI, Arial, sans-serif" font-size="34" text-anchor="middle">Upload progress and log screen</text>
-  <text x="800" y="500" fill="#a4d8eb" font-family="Segoe UI, Arial, sans-serif" font-size="28" text-anchor="middle">Suggested content: progress bar, log console, transfer state</text>
-</svg>
