@@ -5,11 +5,12 @@ a = Analysis(
     ['gui_uploader_qt.py'],
     pathex=[],
     binaries=[],
-    datas=[('ui/main_window.ui', 'ui'), ('ui/admin_window.ui', 'ui')],
+    datas=[('ui/main_window.ui', 'ui'), ('ui/admin_window.ui', 'ui'), ('proxy_channels.json', '.')],
     hiddenimports=[
         'config_manager',
         'drive_manager',
         'firmware_proxy_client',
+        'firmware_proxy_server',
         'intelhex',
         'PySide6.QtUiTools',
         'PySide6.QtCore',

@@ -299,23 +299,116 @@
            <item row="1" column="3">
             <widget class="QLineEdit" name="defaultPortEdit"/>
            </item>
-           <item row="2" column="0">
-            <widget class="QLabel" name="serviceJsonLabel">
-             <property name="text">
-              <string>Backend (URL|API Key):</string>
-             </property>
-            </widget>
-           </item>
-           <item row="2" column="1" colspan="3">
-            <widget class="QLineEdit" name="serviceJsonEdit"/>
-           </item>
-          </layout>
-         </widget>
-        </item>
-        <item>
-         <layout class="QHBoxLayout" name="saveRowLayout">
-          <item>
-           <spacer name="saveRowSpacer">
+            <item row="2" column="0">
+             <widget class="QLabel" name="serviceJsonLabel">
+              <property name="text">
+               <string>Backend (URL|API Key):</string>
+              </property>
+             </widget>
+            </item>
+            <item row="2" column="1" colspan="3">
+             <widget class="QLineEdit" name="serviceJsonEdit">
+              <property name="placeholderText">
+               <string>http://127.0.0.1:8787|cok-gizli-key</string>
+              </property>
+             </widget>
+            </item>
+            <item row="3" column="0">
+             <widget class="QLabel" name="proxyServiceAccountLabel">
+              <property name="text">
+               <string>Service Account JSON:</string>
+              </property>
+             </widget>
+            </item>
+            <item row="3" column="1" colspan="3">
+             <widget class="QLineEdit" name="proxyServiceAccountEdit">
+              <property name="placeholderText">
+               <string>C:\path\service-account.json</string>
+              </property>
+             </widget>
+            </item>
+            <item row="4" column="0">
+             <widget class="QLabel" name="proxyChannelMapLabel">
+              <property name="text">
+               <string>Channel Map JSON:</string>
+              </property>
+             </widget>
+            </item>
+            <item row="4" column="1" colspan="3">
+             <widget class="QLineEdit" name="proxyChannelMapEdit">
+              <property name="placeholderText">
+               <string>proxy_channels.json</string>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+         </item>
+         <item>
+          <widget class="QGroupBox" name="proxyRuntimeGroupBox">
+           <property name="title">
+            <string>Yerel Proxy Servisi</string>
+           </property>
+           <layout class="QGridLayout" name="proxyRuntimeGrid">
+            <item row="0" column="0">
+             <widget class="QLabel" name="proxyRuntimeLabel">
+              <property name="text">
+               <string>Durum:</string>
+              </property>
+             </widget>
+            </item>
+            <item row="0" column="1">
+             <widget class="QLabel" name="proxyRuntimeStatusLabel">
+              <property name="text">
+               <string>Yerel proxy kapali</string>
+              </property>
+              <property name="wordWrap">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+            <item row="1" column="0" colspan="2">
+             <widget class="QLabel" name="proxyRuntimeHintLabel">
+              <property name="text">
+               <string>Bu bolum mevcut HTTP proxy server'i uygulama icinden baslatir. Backend alaniniz localhost veya 127.0.0.1 ise tarama oncesi ayni servis kullanilir.</string>
+              </property>
+              <property name="wordWrap">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+            <item row="2" column="0" colspan="2">
+             <layout class="QHBoxLayout" name="proxyRuntimeButtonsLayout">
+              <item>
+               <widget class="QPushButton" name="proxyStartButton">
+                <property name="text">
+                 <string>Proxy Baslat</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QPushButton" name="proxyStopButton">
+                <property name="text">
+                 <string>Proxy Durdur</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QPushButton" name="proxyHealthButton">
+                <property name="text">
+                 <string>Baglanti Testi</string>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </item>
+           </layout>
+          </widget>
+         </item>
+         <item>
+          <layout class="QHBoxLayout" name="saveRowLayout">
+           <item>
+            <spacer name="saveRowSpacer">
             <property name="orientation">
              <enum>Qt::Horizontal</enum>
             </property>

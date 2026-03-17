@@ -96,6 +96,10 @@ class ProxyState:
         return payload, None
 
 
+class FirmwareProxyHttpServer(ThreadingHTTPServer):
+    allow_reuse_address = True
+
+
 def _send_json(handler: BaseHTTPRequestHandler, status: int, payload: Dict[str, Any]) -> None:
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     handler.send_response(status)
@@ -206,6 +210,46 @@ class FirmwareProxyHandler(BaseHTTPRequestHandler):
         return bool(expected and hmac.compare_digest(expected, provided))
 
 
+def build_proxy_state(api_key: str, service_json: str, channel_map_file: str, token_ttl: int) -> ProxyState:
+    api_key = str(api_key or "").strip()
+    service_json = str(service_json or "").strip()
+    channel_map_file = str(channel_map_file or "").strip()
+    token_ttl = int(token_ttl)
+
+    if not api_key:
+        raise ValueError("FIRMWARE_PROXY_API_KEY tanimli degil")
+    if not service_json:
+        raise ValueError("FIRMWARE_PROXY_SA_JSON tanimli degil")
+    if not channel_map_file:
+        raise ValueError("FIRMWARE_PROXY_CHANNEL_MAP_FILE tanimli degil")
+
+    return ProxyState(
+        api_key=api_key,
+        service_json=service_json,
+        channel_map_file=channel_map_file,
+        token_ttl=token_ttl,
+    )
+
+
+def create_proxy_server(
+    host: str,
+    port: int,
+    api_key: str,
+    service_json: str,
+    channel_map_file: str,
+    token_ttl: int = 120,
+) -> FirmwareProxyHttpServer:
+    state = build_proxy_state(
+        api_key=api_key,
+        service_json=service_json,
+        channel_map_file=channel_map_file,
+        token_ttl=token_ttl,
+    )
+    server = FirmwareProxyHttpServer((str(host or "").strip(), int(port)), FirmwareProxyHandler)
+    server.state = state  # type: ignore[attr-defined]
+    return server
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Firmware proxy server")
     parser.add_argument("--host", default="127.0.0.1")
@@ -217,22 +261,19 @@ def main() -> None:
     service_json = os.environ.get("FIRMWARE_PROXY_SA_JSON", "").strip()
     channel_map_file = os.environ.get("FIRMWARE_PROXY_CHANNEL_MAP_FILE", "").strip()
 
-    if not api_key:
-        raise SystemExit("FIRMWARE_PROXY_API_KEY tanimli degil")
-    if not service_json:
-        raise SystemExit("FIRMWARE_PROXY_SA_JSON tanimli degil")
-    if not channel_map_file:
-        raise SystemExit("FIRMWARE_PROXY_CHANNEL_MAP_FILE tanimli degil")
+    try:
+        server = create_proxy_server(
+            host=args.host,
+            port=args.port,
+            api_key=api_key,
+            service_json=service_json,
+            channel_map_file=channel_map_file,
+            token_ttl=args.ttl,
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
-    state = ProxyState(
-        api_key=api_key,
-        service_json=service_json,
-        channel_map_file=channel_map_file,
-        token_ttl=args.ttl,
-    )
-
-    server = ThreadingHTTPServer((args.host, args.port), FirmwareProxyHandler)
-    server.state = state  # type: ignore[attr-defined]
+    state = server.state  # type: ignore[attr-defined]
 
     print("Firmware proxy server started")
     print(f"Address: http://{args.host}:{args.port}")

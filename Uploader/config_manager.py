@@ -55,6 +55,7 @@ DEFAULT_CONFIG = {
     "max_retries": 7,
     "proxy_backend": "",
     "service_account_json": "",  # Legacy direct-Drive fallback
+    "proxy_channel_map_file": "",
 }
 
 

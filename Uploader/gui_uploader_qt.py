@@ -1,7 +1,8 @@
 ﻿import os
 import sys
 import threading
-from typing import Any, Dict, List, Optional
+import urllib.parse
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     import serial.tools.list_ports as serial_list_ports
@@ -54,6 +55,7 @@ from config_manager import (
 )
 from drive_manager import DriveManager
 from firmware_proxy_client import FirmwareProxyClient
+from firmware_proxy_server import create_proxy_server
 from uploder import update_stm32_key, upload_firmware
 
 
@@ -79,6 +81,9 @@ class FirmwareUpdaterQtApp:
         self.admin_password: Optional[str] = None
         self.drive_manager: Optional[DriveManager] = None
         self.proxy_client: Optional[FirmwareProxyClient] = None
+        self.proxy_server: Optional[Any] = None
+        self.proxy_server_thread: Optional[threading.Thread] = None
+        self._proxy_runtime_config: Optional[Dict[str, Any]] = None
         self.available_files: List[Dict[str, Any]] = []
         self.pending_firmware_version: Optional[int] = None
         self.stop_requested = False
@@ -119,6 +124,8 @@ class FirmwareUpdaterQtApp:
         self.packet_edit: Optional[QLineEdit] = None
         self.default_port_edit: Optional[QLineEdit] = None
         self.service_json_edit: Optional[QLineEdit] = None
+        self.proxy_service_account_edit: Optional[QLineEdit] = None
+        self.proxy_channel_map_edit: Optional[QLineEdit] = None
         self.add_device_button: Optional[QPushButton] = None
         self.edit_device_button: Optional[QPushButton] = None
         self.delete_device_button: Optional[QPushButton] = None
@@ -126,6 +133,10 @@ class FirmwareUpdaterQtApp:
         self.change_password_button: Optional[QPushButton] = None
         self.reset_config_button: Optional[QPushButton] = None
         self.update_stm32_key_button: Optional[QPushButton] = None
+        self.proxy_start_button: Optional[QPushButton] = None
+        self.proxy_stop_button: Optional[QPushButton] = None
+        self.proxy_health_button: Optional[QPushButton] = None
+        self.proxy_runtime_status_label: Optional[QLabel] = None
         self.admin_status_label: Optional[QLabel] = None
 
         self._loading_frames = [" .", " ..", " ...", " ...."]
@@ -262,10 +273,16 @@ class FirmwareUpdaterQtApp:
         self.packet_edit = self._aw(QLineEdit, "packetEdit")
         self.default_port_edit = self._aw(QLineEdit, "defaultPortEdit")
         self.service_json_edit = self._aw(QLineEdit, "serviceJsonEdit")
+        self.proxy_service_account_edit = self._aw(QLineEdit, "proxyServiceAccountEdit")
+        self.proxy_channel_map_edit = self._aw(QLineEdit, "proxyChannelMapEdit")
         self.save_all_button = self._aw(QPushButton, "saveAllButton")
         self.change_password_button = self._aw(QPushButton, "changePasswordButton")
         self.reset_config_button = self._aw(QPushButton, "resetConfigButton")
         self.update_stm32_key_button = self._aw(QPushButton, "updateStm32KeyButton")
+        self.proxy_start_button = self._aw(QPushButton, "proxyStartButton")
+        self.proxy_stop_button = self._aw(QPushButton, "proxyStopButton")
+        self.proxy_health_button = self._aw(QPushButton, "proxyHealthButton")
+        self.proxy_runtime_status_label = self._aw(QLabel, "proxyRuntimeStatusLabel")
         self.admin_status_label = self._aw(QLabel, "adminStatusLabel")
 
     def _connect_admin_ui(self) -> None:
@@ -293,6 +310,12 @@ class FirmwareUpdaterQtApp:
             self.reset_config_button.clicked.connect(self._reset_config_dialog)
         if self.update_stm32_key_button is not None:
             self.update_stm32_key_button.clicked.connect(self._update_stm32_key_dialog)
+        if self.proxy_start_button is not None:
+            self.proxy_start_button.clicked.connect(self._start_local_proxy_from_admin)
+        if self.proxy_stop_button is not None:
+            self.proxy_stop_button.clicked.connect(self._stop_local_proxy_from_admin)
+        if self.proxy_health_button is not None:
+            self.proxy_health_button.clicked.connect(self._test_proxy_connection)
 
     def _open_admin_window(self) -> None:
         self._ensure_admin_window()
@@ -303,6 +326,7 @@ class FirmwareUpdaterQtApp:
         self.admin_window.raise_()
         self.admin_window.activateWindow()
         self._play_admin_intro_animation()
+        self._refresh_proxy_runtime_status()
         self._set_admin_status("Admin paneli acik")
 
     def _dialog_parent(self) -> QWidget:
@@ -1191,9 +1215,11 @@ class FirmwareUpdaterQtApp:
             self.change_password_button,
             self.update_stm32_key_button,
             self.toggle_aes_button,
+            self.proxy_health_button,
+            self.proxy_stop_button,
         ]
         danger_buttons = [self.delete_device_button, self.reset_config_button]
-        primary_buttons = [self.add_device_button, self.edit_device_button, self.save_all_button]
+        primary_buttons = [self.add_device_button, self.edit_device_button, self.save_all_button, self.proxy_start_button]
 
         for btn in default_buttons:
             if btn is None:
@@ -1218,7 +1244,7 @@ class FirmwareUpdaterQtApp:
                 font-weight: 700;
                 color: #f5fbff;
             }
-            QLabel#adminInfoLabel, QLabel#securityHintLabel, QLabel#deviceCountLabel {
+            QLabel#adminInfoLabel, QLabel#securityHintLabel, QLabel#deviceCountLabel, QLabel#proxyRuntimeHintLabel {
                 color: #9bb0c9;
             }
             QTabWidget::pane {
@@ -1273,6 +1299,13 @@ class FirmwareUpdaterQtApp:
                 border: 1px solid #30363d;
                 border-radius: 8px;
                 padding: 4px 8px;
+            }
+            QLabel#proxyRuntimeStatusLabel {
+                color: #f0f6fc;
+                background: rgba(13, 17, 23, 170);
+                border: 1px solid #30363d;
+                border-radius: 8px;
+                padding: 8px 10px;
             }
             QPushButton#toggleAesButton {
                 min-width: 54px;
@@ -1454,6 +1487,289 @@ class FirmwareUpdaterQtApp:
     def _proxy_backend_value(self) -> str:
         return str(self.config.get("proxy_backend", "")).strip()
 
+    def _proxy_service_account_value(self) -> str:
+        return str(self.config.get("service_account_json", "")).strip()
+
+    def _default_proxy_channel_map_path(self) -> str:
+        return resource_path("proxy_channels.json")
+
+    def _proxy_channel_map_value(self) -> str:
+        value = str(self.config.get("proxy_channel_map_file", "")).strip()
+        return value or self._default_proxy_channel_map_path()
+
+    def _proxy_backend_form_value(self) -> str:
+        if self.service_json_edit is not None:
+            return self.service_json_edit.text().strip()
+        return self._proxy_backend_value()
+
+    def _proxy_service_account_form_value(self) -> str:
+        if self.proxy_service_account_edit is not None:
+            return self.proxy_service_account_edit.text().strip()
+        return self._proxy_service_account_value()
+
+    def _proxy_channel_map_form_value(self) -> str:
+        if self.proxy_channel_map_edit is not None:
+            value = self.proxy_channel_map_edit.text().strip()
+            if value:
+                return value
+        return self._proxy_channel_map_value()
+
+    def _set_proxy_runtime_status(self, text: str) -> None:
+        if self.proxy_runtime_status_label is not None:
+            self.proxy_runtime_status_label.setText(text)
+
+    def _sync_proxy_runtime_refs(self) -> None:
+        if self.proxy_server_thread is not None and not self.proxy_server_thread.is_alive():
+            self.proxy_server = None
+            self.proxy_server_thread = None
+            self._proxy_runtime_config = None
+
+    def _is_embedded_proxy_running(self) -> bool:
+        self._sync_proxy_runtime_refs()
+        return self.proxy_server is not None and self.proxy_server_thread is not None
+
+    def _is_local_proxy_host(self, host: str) -> bool:
+        return str(host or "").strip().lower() in {"127.0.0.1", "localhost", "::1"}
+
+    def _apply_proxy_form_values_to_runtime(self) -> None:
+        self.config["proxy_backend"] = self._proxy_backend_form_value()
+        self.config["service_account_json"] = self._proxy_service_account_form_value()
+        raw_channel_map = ""
+        if self.proxy_channel_map_edit is not None:
+            raw_channel_map = self.proxy_channel_map_edit.text().strip()
+        self.config["proxy_channel_map_file"] = raw_channel_map
+        self._reload_download_clients()
+
+    def _collect_local_proxy_settings(self, use_form_values: bool) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+        backend_value = self._proxy_backend_form_value() if use_form_values else self._proxy_backend_value()
+        client = FirmwareProxyClient.from_backend_spec(backend_value, timeout=2)
+        if client.config_error:
+            return None, client.config_error
+
+        parsed = urllib.parse.urlparse(client.base_url)
+        scheme = str(parsed.scheme or "").lower()
+        host = str(parsed.hostname or "").strip()
+        is_local = self._is_local_proxy_host(host)
+        port = parsed.port or (8787 if is_local else 80)
+        path = str(parsed.path or "").strip()
+
+        if scheme != "http":
+            return None, "Yerel proxy icin backend adresi http:// ile baslamali."
+        if not host:
+            return None, "Proxy host okunamadi."
+        if not is_local:
+            return None, "GUI sadece localhost veya 127.0.0.1 adresindeki yerel proxyyi baslatabilir."
+        if path not in ("", "/"):
+            return None, "Yerel proxy backend adresi ek yol icermemeli."
+
+        service_json = self._proxy_service_account_form_value() if use_form_values else self._proxy_service_account_value()
+        if not service_json:
+            return None, "Service Account JSON yolu bos."
+        if not os.path.exists(service_json):
+            return None, f"Service Account JSON bulunamadi: {service_json}"
+
+        channel_map_file = self._proxy_channel_map_form_value() if use_form_values else self._proxy_channel_map_value()
+        if not channel_map_file:
+            return None, "Channel map JSON yolu bos."
+        if not os.path.exists(channel_map_file):
+            return None, f"Channel map JSON bulunamadi: {channel_map_file}"
+
+        return {
+            "base_url": client.base_url,
+            "api_key": client.api_key,
+            "host": host,
+            "port": int(port),
+            "service_json": service_json,
+            "channel_map_file": channel_map_file,
+            "token_ttl": 120,
+        }, None
+
+    def _start_local_proxy_server(self, settings: Dict[str, Any], announce: bool = True) -> Optional[str]:
+        self._sync_proxy_runtime_refs()
+        if self._is_embedded_proxy_running():
+            return None
+
+        try:
+            server = create_proxy_server(
+                host=str(settings.get("host", "")).strip(),
+                port=int(settings.get("port", 8787)),
+                api_key=str(settings.get("api_key", "")).strip(),
+                service_json=str(settings.get("service_json", "")).strip(),
+                channel_map_file=str(settings.get("channel_map_file", "")).strip(),
+                token_ttl=int(settings.get("token_ttl", 120)),
+            )
+        except Exception as exc:
+            return f"Yerel proxy baslatilamadi: {exc}"
+
+        def worker() -> None:
+            try:
+                server.serve_forever()
+            except Exception as exc:
+                self.signals.log.emit(f"Yerel proxy durdu: {exc}")
+            finally:
+                try:
+                    server.server_close()
+                except Exception:
+                    pass
+
+        self.proxy_server = server
+        self.proxy_server_thread = threading.Thread(target=worker, name="local-proxy-server", daemon=True)
+        self._proxy_runtime_config = dict(settings)
+        self.proxy_server_thread.start()
+        self._reload_download_clients()
+
+        if announce:
+            self._append_log(f"Yerel proxy baslatildi: {settings.get('base_url', '')}")
+            self._set_admin_status("Yerel proxy baslatildi.")
+
+        self._refresh_proxy_runtime_status()
+        return None
+
+    def _stop_local_proxy_server(self, announce: bool = True) -> Optional[str]:
+        self._sync_proxy_runtime_refs()
+        if self.proxy_server is None:
+            return "GUI icinden baslatilmis yerel proxy bulunamadi."
+
+        try:
+            self.proxy_server.shutdown()
+            if self.proxy_server_thread is not None:
+                self.proxy_server_thread.join(timeout=2.5)
+                if self.proxy_server_thread.is_alive():
+                    return "Yerel proxy durdurulurken zaman asimi olustu."
+        except Exception as exc:
+            return f"Yerel proxy durdurulamadi: {exc}"
+
+        self.proxy_server = None
+        self.proxy_server_thread = None
+        self._proxy_runtime_config = None
+
+        self._reload_download_clients()
+        if announce:
+            self._append_log("Yerel proxy durduruldu.")
+            self._set_admin_status("Yerel proxy durduruldu.")
+        self._refresh_proxy_runtime_status()
+        return None
+
+    def _refresh_proxy_runtime_status(self) -> None:
+        self._sync_proxy_runtime_refs()
+        backend_value = self._proxy_backend_value()
+        client = FirmwareProxyClient.from_backend_spec(backend_value, timeout=1)
+
+        start_enabled = False
+        stop_enabled = self._is_embedded_proxy_running()
+        test_enabled = bool(backend_value)
+        status_text = "Proxy backend tanimli degil."
+
+        if backend_value and not client.config_error:
+            parsed = urllib.parse.urlparse(client.base_url)
+            host = str(parsed.hostname or "").strip()
+            is_local = self._is_local_proxy_host(host)
+            start_enabled = is_local and not stop_enabled
+            payload, error = client.health()
+            _ = payload
+            if stop_enabled:
+                runtime_url = client.base_url
+                if isinstance(self._proxy_runtime_config, dict):
+                    runtime_url = str(self._proxy_runtime_config.get("base_url", client.base_url))
+                status_text = f"Yerel proxy GUI icinde calisiyor: {runtime_url}"
+            elif error is None:
+                prefix = "Yerel proxy erisilebilir" if is_local else "Harici proxy erisilebilir"
+                status_text = f"{prefix}: {client.base_url}"
+            else:
+                prefix = "Yerel proxy ulasilamiyor" if is_local else "Harici proxy ulasilamiyor"
+                status_text = f"{prefix}: {client.base_url}"
+        elif backend_value and client.config_error:
+            status_text = client.config_error
+
+        if self.proxy_start_button is not None:
+            self.proxy_start_button.setEnabled(start_enabled)
+        if self.proxy_stop_button is not None:
+            self.proxy_stop_button.setEnabled(stop_enabled)
+        if self.proxy_health_button is not None:
+            self.proxy_health_button.setEnabled(test_enabled)
+        self._set_proxy_runtime_status(status_text)
+
+    def _start_local_proxy_from_admin(self) -> None:
+        self._apply_proxy_form_values_to_runtime()
+        client = FirmwareProxyClient.from_backend_spec(self._proxy_backend_value(), timeout=1)
+        if client.is_ready():
+            _, health_error = client.health()
+            if health_error is None and not self._is_embedded_proxy_running():
+                self._refresh_proxy_runtime_status()
+                self._set_admin_status("Proxy zaten erisilebilir.")
+                self._append_log(f"Proxy zaten erisilebilir: {client.base_url}")
+                return
+
+        settings, error = self._collect_local_proxy_settings(use_form_values=False)
+        if error:
+            self._refresh_proxy_runtime_status()
+            QMessageBox.warning(self._dialog_parent(), "Uyari", error)
+            return
+
+        start_error = self._start_local_proxy_server(settings, announce=True)
+        if start_error:
+            self._refresh_proxy_runtime_status()
+            QMessageBox.critical(self._dialog_parent(), "Hata", start_error)
+            return
+
+    def _stop_local_proxy_from_admin(self) -> None:
+        stop_error = self._stop_local_proxy_server(announce=True)
+        if stop_error:
+            self._refresh_proxy_runtime_status()
+            QMessageBox.warning(self._dialog_parent(), "Uyari", stop_error)
+
+    def _test_proxy_connection(self) -> None:
+        self._apply_proxy_form_values_to_runtime()
+        client = FirmwareProxyClient.from_backend_spec(self._proxy_backend_value(), timeout=2)
+        if client.config_error:
+            self._refresh_proxy_runtime_status()
+            QMessageBox.warning(self._dialog_parent(), "Uyari", client.config_error)
+            return
+
+        payload, error = client.health()
+        if error:
+            self._refresh_proxy_runtime_status()
+            self._append_log(error)
+            QMessageBox.warning(self._dialog_parent(), "Proxy Testi", error)
+            return
+
+        ts = "-"
+        if isinstance(payload, dict):
+            ts = str(payload.get("ts", "-"))
+        self._refresh_proxy_runtime_status()
+        self._append_log(f"Proxy testi basarili: {client.base_url} (ts={ts})")
+        self._set_admin_status("Proxy baglanti testi basarili.")
+        QMessageBox.information(self._dialog_parent(), "Proxy Testi", f"Proxy erisilebilir:\n{client.base_url}")
+
+    def _ensure_local_proxy_available(self) -> Optional[str]:
+        backend_value = self._proxy_backend_value()
+        if not backend_value:
+            return None
+
+        client = FirmwareProxyClient.from_backend_spec(backend_value, timeout=1)
+        if client.config_error:
+            return client.config_error
+
+        parsed = urllib.parse.urlparse(client.base_url)
+        if not self._is_local_proxy_host(parsed.hostname or ""):
+            return None
+
+        _, health_error = client.health()
+        if health_error is None:
+            return None
+
+        settings, settings_error = self._collect_local_proxy_settings(use_form_values=False)
+        if settings_error:
+            return f"{health_error} Yerel proxy otomatik baslatilamadi: {settings_error}"
+
+        start_error = self._start_local_proxy_server(settings, announce=False)
+        if start_error:
+            return f"{health_error} Yerel proxy otomatik baslatilamadi: {start_error}"
+
+        self._append_log(f"Yerel proxy otomatik baslatildi: {settings.get('base_url', '')}")
+        self._set_admin_status("Yerel proxy otomatik baslatildi.")
+        return None
+
     def _scan_ports(self) -> None:
         if self._upload_running:
             return
@@ -1505,6 +1821,16 @@ class FirmwareUpdaterQtApp:
         self._set_progress_busy(True)
         self.scan_folder_button.setEnabled(False)
         self.available_files = []
+
+        if use_proxy:
+            proxy_error = self._ensure_local_proxy_available()
+            if proxy_error:
+                self._set_progress_busy(False)
+                self._stop_status_animation("Hazir")
+                self.scan_folder_button.setEnabled(True)
+                self._stop_update_animation(proxy_error)
+                self._append_log(proxy_error)
+                return
 
         def worker() -> None:
             try:
@@ -1655,6 +1981,13 @@ class FirmwareUpdaterQtApp:
             "is_rf": self.rf_mode_check.isChecked(),
         }
 
+        if target_download_token:
+            proxy_error = self._ensure_local_proxy_available()
+            if proxy_error:
+                self._append_log(proxy_error)
+                QMessageBox.warning(self._dialog_parent(), "Uyari", proxy_error)
+                return
+
         self._set_completion_actions_visible(False)
         self._hide_success_overlay(animate=False)
         self._upload_running = True
@@ -1801,7 +2134,12 @@ class FirmwareUpdaterQtApp:
             self.default_port_edit.setText(str(self.config.get("serial_port", "COM7")))
         if self.service_json_edit is not None:
             self.service_json_edit.setText(str(self.config.get("proxy_backend", "")))
+        if self.proxy_service_account_edit is not None:
+            self.proxy_service_account_edit.setText(self._proxy_service_account_value())
+        if self.proxy_channel_map_edit is not None:
+            self.proxy_channel_map_edit.setText(self._proxy_channel_map_value())
         self._refresh_admin_device_list()
+        self._refresh_proxy_runtime_status()
 
     def _refresh_admin_device_list(self) -> None:
         if self.device_list_widget is None:
@@ -2032,7 +2370,15 @@ class FirmwareUpdaterQtApp:
         if not self.admin_password:
             QMessageBox.warning(self._dialog_parent(), "Uyari", "Admin girisi gerekli.")
             return
-        if None in (self.baud_edit, self.retry_edit, self.packet_edit, self.default_port_edit, self.service_json_edit):
+        if None in (
+            self.baud_edit,
+            self.retry_edit,
+            self.packet_edit,
+            self.default_port_edit,
+            self.service_json_edit,
+            self.proxy_service_account_edit,
+            self.proxy_channel_map_edit,
+        ):
             QMessageBox.warning(self._dialog_parent(), "Uyari", "Admin arayuzu tam yuklenemedi.")
             return
         try:
@@ -2041,6 +2387,8 @@ class FirmwareUpdaterQtApp:
             self.config["packet_size"] = int(self.packet_edit.text().strip())  # type: ignore[union-attr]
             self.config["serial_port"] = self.default_port_edit.text().strip()  # type: ignore[union-attr]
             self.config["proxy_backend"] = self.service_json_edit.text().strip()  # type: ignore[union-attr]
+            self.config["service_account_json"] = self.proxy_service_account_edit.text().strip()  # type: ignore[union-attr]
+            self.config["proxy_channel_map_file"] = self.proxy_channel_map_edit.text().strip()  # type: ignore[union-attr]
         except ValueError:
             QMessageBox.warning(self._dialog_parent(), "Uyari", "Sayi alanlari gecerli olmali.")
             return
@@ -2049,7 +2397,12 @@ class FirmwareUpdaterQtApp:
             save_config(self.config, self.admin_password)
             self._reload_download_clients()
             self._refresh_device_list()
-            self._set_admin_status("Tum ayarlar kaydedildi.")
+            self._refresh_proxy_runtime_status()
+            if self._is_embedded_proxy_running():
+                self._append_log("Proxy ayarlari kaydedildi. Etkinlesmesi icin yerel proxyyi yeniden baslatin.")
+                self._set_admin_status("Ayarlar kaydedildi. Proxy icin yeniden baslatma gerekebilir.")
+            else:
+                self._set_admin_status("Tum ayarlar kaydedildi.")
             QMessageBox.information(self._dialog_parent(), "Basarili", "Ayarlar kaydedildi.")
         except Exception as exc:
             QMessageBox.critical(self._dialog_parent(), "Hata", f"Kayit hatasi: {exc}")
@@ -2232,11 +2585,17 @@ class FirmwareUpdaterQtApp:
             self._stop_status_animation("STM32 key guncelleme basarisiz.")
             QMessageBox.critical(self._dialog_parent(), "Hata", "STM32 key guncelleme basarisiz.")
 
+    def shutdown(self) -> None:
+        stop_error = self._stop_local_proxy_server(announce=False)
+        if stop_error and self._is_embedded_proxy_running():
+            self._append_log(stop_error)
+
 
 def main() -> None:
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     controller = FirmwareUpdaterQtApp()
+    app.aboutToQuit.connect(controller.shutdown)
     controller.show()
     sys.exit(app.exec())
 
