@@ -668,33 +668,6 @@ Both embedded projects are organized as STM32CubeIDE/CubeMX projects. The corres
 - `uart_rf_gonderici/uart_rf_gonderici.ioc`
 - `alici_cihaz/alıcı_cihaz.ioc`
 
-## Sunum İçin Önerilen Hikâye / Suggested Demo Story
-
-### TR
-
-Bu projeyi sunarken aşağıdaki sıralama iyi çalışır:
-
-1. **Problemi anlatın:** Uzak cihazı fiziksel sökme olmadan güncelleme ihtiyacı.
-2. **Mimarinin gücünü gösterin:** PC -> Gateway -> RF -> Receiver -> Flash zinciri.
-3. **Wizard ekranını gösterin:** Operatörün sistemi nasıl kullandığını anlatın.
-4. **Admin panelini gösterin:** Cihaz profili, kanal adı, backend bilgisi, AES key ve güvenlik.
-5. **Progress ekranını gösterin:** Sistem yalnızca veri göndermiyor, adım adım durum raporluyor.
-6. **Kod örneklerini gösterin:** Boot kararı, reliable chunking, resume ve şifreleme.
-7. **Güvenilirlik vurgusu yapın:** CRC, resume, ACK/NACK, page-by-page flash erase.
-8. **Güvenlik vurgusu yapın:** AES-256-CBC, ECDH, key store, config encryption.
-
-### EN
-
-When presenting this project, the following story usually works well:
-
-1. **State the problem:** remote firmware updates without physically reaching the device.
-2. **Show the architecture:** PC -> Gateway -> RF -> Receiver -> Flash.
-3. **Show the wizard:** explain the operator workflow.
-4. **Show the admin panel:** device profiles, channel naming, backend setup, AES key handling, and security.
-5. **Show the progress view:** the system does not just send bytes, it reports state clearly.
-6. **Show code examples:** boot decision, reliable chunking, resume, and encryption.
-7. **Emphasize reliability:** CRC, resume, ACK/NACK, page-by-page erase.
-8. **Emphasize security:** AES-256-CBC, ECDH, key store, config encryption.
 
 ## Ek Notlar / Additional Notes
 
@@ -715,9 +688,4 @@ Receiver bootloader NeoPixel renkleri:
 - **TR:** Kodda varsayılan admin bilgisi `admin / admin` olarak tanımlı. Gerçek kullanımda ilk iş bunun değiştirilmesi gerekir.
 - **EN:** The code defines the default admin credentials as `admin / admin`. In any real deployment, this should be changed immediately.
 
-### Bu README nasıl güncellenmeli? / How should this README be updated later?
 
-- **TR:** Yeni ekran görüntüsü eklerseniz yalnızca `docs/images/` içindeki placeholder dosyalarını değiştirmeniz yeterlidir.
-- **EN:** When you add real screenshots, you only need to replace the placeholder files under `docs/images/`.
-- **TR:** Protokol veya adres sabitleri değişirse önce `rf_bootloader.h` ve `rf_protocol.h`, sonra README güncellenmelidir.
-- **EN:** If protocol or memory-map constants change, update `rf_bootloader.h` and `rf_protocol.h` first, then update this README.
