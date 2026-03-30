@@ -66,3 +66,19 @@ def test_list_all_files_skips_non_firmware():
     assert len(files) == 2
     names = {f["name"] for f in files}
     assert names == {"update_1.bin", "update_2.hex"}
+
+
+def test_check_updates_bare_except_is_exception():
+    """KeyboardInterrupt gibi sinyaller check_updates_in_folder'dan kaçmamalı;
+    bare except yerine Exception kullanılmalı."""
+    import inspect, ast, textwrap
+    import drive_manager as dm_module
+    src = inspect.getsource(dm_module.DriveManager.check_updates_in_folder)
+    # AST ile bare except kontrolü
+    tree = ast.parse(textwrap.dedent(src))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ExceptHandler) and node.type is None:
+            raise AssertionError(
+                "check_updates_in_folder içinde 'except:' (bare) bulundu. "
+                "'except Exception:' olmalı."
+            )

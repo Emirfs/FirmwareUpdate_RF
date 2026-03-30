@@ -159,7 +159,7 @@ class DriveManager:
                     if ver is not None and ver > max_ver:
                         max_ver = ver
                         max_file = file
-                except:
+                except Exception:
                     continue
             
             if max_file:
