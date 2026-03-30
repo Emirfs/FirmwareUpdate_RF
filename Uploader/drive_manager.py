@@ -80,7 +80,7 @@ class DriveManager:
     def list_all_files_in_folder(self, folder_id):
         """
         Klasör içindeki tüm firmware dosyalarını (.bin ve .hex) listeler.
-        
+
         Returns:
             (files_list, error_message)
             files_list: [{"id", "name", "version", "type"}, ...] versiyona göre azalan sıralı
@@ -90,14 +90,24 @@ class DriveManager:
 
         try:
             query = f"'{folder_id}' in parents and trashed = false and mimeType != 'application/vnd.google-apps.folder'"
-            results = self.service.files().list(
-                q=query, fields="files(id, name, size)",
-                pageSize=100
-            ).execute()
-            files = results.get('files', [])
+            all_raw_files = []
+            page_token = None
+            while True:
+                kwargs = {
+                    "q": query,
+                    "fields": "nextPageToken, files(id, name, size)",
+                    "pageSize": 100,
+                }
+                if page_token:
+                    kwargs["pageToken"] = page_token
+                results = self.service.files().list(**kwargs).execute()
+                all_raw_files.extend(results.get("files", []))
+                page_token = results.get("nextPageToken")
+                if not page_token:
+                    break
 
             firmware_files = []
-            for file in files:
+            for file in all_raw_files:
                 name = file.get('name', '')
                 lower_name = name.lower()
                 # Sadece .bin ve .hex dosyalarını al
