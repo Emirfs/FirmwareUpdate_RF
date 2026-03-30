@@ -33,6 +33,7 @@ def _b64url_decode(data: str) -> bytes:
 
 class ProxyState:
     _CATALOG_TTL: float = 60.0
+    _AUTH_PRUNE_TTL: float = 120.0
 
     def __init__(self, api_key: str, service_json: str, channel_map_file: str, token_ttl: int) -> None:
         self.api_key = api_key
@@ -108,6 +109,7 @@ class ProxyState:
         with self._auth_lock:
             count, window_start = self._auth_fails.get(ip, (0, 0.0))
             if now - window_start > self._AUTH_BLOCK_TTL:
+                self._auth_fails.pop(ip, None)
                 return False
             return count >= self._AUTH_FAIL_MAX
 
@@ -115,7 +117,7 @@ class ProxyState:
         now = time.time()
         with self._auth_lock:
             self._auth_fails.pop(ip, None)
-            expired = [k for k, (c, t) in self._auth_fails.items() if now - t > 120.0]
+            expired = [k for k, (c, t) in self._auth_fails.items() if now - t > self._AUTH_PRUNE_TTL]
             for k in expired:
                 del self._auth_fails[k]
 
@@ -317,8 +319,8 @@ class FirmwareProxyHandler(BaseHTTPRequestHandler):
         if bool(expected and hmac.compare_digest(expected, provided)):
             self.state.clear_auth_fail(ip)
             return True, False
-        self.state.record_auth_fail(ip)
-        return False, False
+        just_blocked = self.state.record_auth_fail(ip)
+        return False, just_blocked
 
 
 def build_proxy_state(api_key: str, service_json: str, channel_map_file: str, token_ttl: int) -> ProxyState:

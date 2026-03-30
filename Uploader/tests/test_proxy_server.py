@@ -206,3 +206,17 @@ def test_rate_limit_clears_on_success():
 
     assert state.is_auth_blocked("1.2.3.4") is False
     assert "1.2.3.4" not in state._auth_fails
+
+
+def test_rate_limit_10th_request_gets_429():
+    """10. hatalı deneme anında 429 döner (blocked=True)."""
+    state = _make_proxy_state()
+
+    # İlk 9 deneme — bloklanmaz
+    for _ in range(9):
+        blocked = state.record_auth_fail("5.6.7.8")
+    assert not blocked
+
+    # 10. deneme — bloklanır
+    blocked = state.record_auth_fail("5.6.7.8")
+    assert blocked is True
