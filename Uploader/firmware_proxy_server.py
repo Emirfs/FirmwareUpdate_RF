@@ -6,10 +6,11 @@ import io
 import json
 import os
 import sys
+import threading
 import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from drive_manager import DriveManager
 
@@ -35,6 +36,9 @@ class ProxyState:
         self.token_ttl = token_ttl
         self.drive = DriveManager(service_account_json=service_json)
         self.channel_map = self._load_channel_map()
+        self._catalog_cache: Dict[str, Tuple[float, List]] = {}
+        self._catalog_lock = threading.Lock()
+        self._CATALOG_TTL = 60.0
 
     def _load_channel_map(self) -> Dict[str, Any]:
         if not self.channel_map_file or not os.path.exists(self.channel_map_file):
@@ -47,6 +51,8 @@ class ProxyState:
 
     def reload(self) -> None:
         self.channel_map = self._load_channel_map()
+        with self._catalog_lock:
+            self._catalog_cache.clear()
 
     def resolve_folder_id(self, channel: str) -> Optional[str]:
         entry = self.channel_map.get(channel)
@@ -55,6 +61,26 @@ class ProxyState:
         if isinstance(entry, dict):
             return str(entry.get("folder_id", "")).strip()
         return None
+
+    def get_catalog(self, channel: str) -> Tuple[Optional[List], Optional[str]]:
+        folder_id = self.resolve_folder_id(channel)
+        if not folder_id:
+            return None, "kanal bulunamadi"
+
+        now = time.time()
+        with self._catalog_lock:
+            cached = self._catalog_cache.get(channel)
+            if cached is not None and (now - cached[0]) < self._CATALOG_TTL:
+                return cached[1], None
+
+        files, error = self.drive.list_all_files_in_folder(folder_id)
+        if files is None:
+            return None, error
+
+        with self._catalog_lock:
+            self._catalog_cache[channel] = (time.time(), files)
+
+        return files, error
 
     def make_download_token(self, channel: str, file_item: Dict[str, Any]) -> str:
         now = int(time.time())
@@ -147,14 +173,10 @@ class FirmwareProxyHandler(BaseHTTPRequestHandler):
                 _send_json(self, 400, {"error": "channel zorunlu"})
                 return
 
-            folder_id = self.state.resolve_folder_id(channel)
-            if not folder_id:
-                _send_json(self, 404, {"error": "kanal bulunamadi"})
-                return
-
-            files, error = self.state.drive.list_all_files_in_folder(folder_id)
+            files, error = self.state.get_catalog(channel)
             if files is None:
-                _send_json(self, 502, {"error": error or "drive catalog hatasi"})
+                status_code = 404 if error == "kanal bulunamadi" else 502
+                _send_json(self, status_code, {"error": error or "drive catalog hatasi"})
                 return
 
             result = []
