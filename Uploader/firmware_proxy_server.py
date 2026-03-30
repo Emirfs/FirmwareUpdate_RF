@@ -56,8 +56,9 @@ class ProxyState:
         return data
 
     def reload(self) -> None:
-        self.channel_map = self._load_channel_map()
+        new_map = self._load_channel_map()
         with self._catalog_lock:
+            self.channel_map = new_map
             self._catalog_cache.clear()
 
     def _stat_channel_map(self) -> Tuple[float, int]:
@@ -78,8 +79,8 @@ class ProxyState:
             time.sleep(5)
             try:
                 self._poll_channel_map_once()
-            except Exception:
-                pass
+            except Exception as exc:
+                print(f"[channel-map-watcher] reload error: {exc}", file=sys.stderr)
 
     def _start_channel_map_watcher(self) -> None:
         t = threading.Thread(target=self._channel_map_poll_loop, daemon=True)

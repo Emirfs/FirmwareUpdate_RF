@@ -109,7 +109,7 @@ def test_channel_map_reload_on_file_change():
     new_stat.st_mtime = 2000.0
     new_stat.st_size = 200
 
-    with patch("os.stat", return_value=new_stat):
+    with patch("firmware_proxy_server.os.stat", return_value=new_stat):
         state._poll_channel_map_once()
 
     assert len(reload_called) == 1
@@ -128,7 +128,15 @@ def test_channel_map_no_reload_if_unchanged():
     unchanged_stat.st_mtime = 1000.0
     unchanged_stat.st_size = 100
 
-    with patch("os.stat", return_value=unchanged_stat):
+    with patch("firmware_proxy_server.os.stat", return_value=unchanged_stat):
         state._poll_channel_map_once()
 
     assert len(reload_called) == 0
+
+
+def test_stat_channel_map_returns_zero_on_oserror():
+    """OSError olursa (0.0, 0) döner."""
+    state = _make_proxy_state()
+    with patch("firmware_proxy_server.os.stat", side_effect=OSError):
+        result = state._stat_channel_map()
+    assert result == (0.0, 0)
