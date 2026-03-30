@@ -1624,10 +1624,31 @@ class FirmwareUpdaterQtApp:
             try:
                 self.config = load_config("admin")
                 self._append_log("Config yuklendi (varsayilan sifre ile).")
+                self.gui_logger.log_operation(
+                    "Config Yükleme",
+                    {
+                        "Durum": "Yuklendi",
+                        "Cihaz sayısı": str(len(self.config.get("devices", []))),
+                        "Proxy": "Yapilandirilmis" if self.config.get("proxy_backend") else "Tanimli degil",
+                    },
+                    success=True,
+                )
             except ValueError:
                 self._append_log("Config sifreli. Admin girisi yapmadan admin paneli acilmaz.")
+                self.gui_logger.log_operation(
+                    "Config Yükleme",
+                    {"Durum": "Sifreli — admin girisi gerekli"},
+                    success=False,
+                    error="Config dosyasi sifre korumalı, otomatik yükleme yapılamadı",
+                )
         else:
             self._append_log("Config dosyasi yok. Admin panelinden cihaz ekleyin.")
+            self.gui_logger.log_operation(
+                "Config Yükleme",
+                {"Durum": "Dosya yok"},
+                success=False,
+                error="Config dosyası bulunamadı",
+            )
         self._reload_download_clients()
         self._refresh_device_list()
 
@@ -1778,6 +1799,16 @@ class FirmwareUpdaterQtApp:
                 token_ttl=int(settings.get("token_ttl", 120)),
             )
         except Exception as exc:
+            self.gui_logger.log_operation(
+                "Proxy Başlatma",
+                {
+                    "Adres": str(settings.get("base_url", f"http://{settings.get('host','?')}:{settings.get('port','?')}")),
+                    "Servis JSON": str(settings.get("service_json", "?")),
+                    "Kanal haritası": str(settings.get("channel_map_file", "?")),
+                },
+                success=False,
+                error=str(exc),
+            )
             return f"Yerel proxy baslatilamadi: {exc}"
 
         def worker() -> None:
@@ -1800,7 +1831,16 @@ class FirmwareUpdaterQtApp:
         if announce:
             self._append_log(f"Yerel proxy baslatildi: {settings.get('base_url', '')}")
             self._set_admin_status("Yerel proxy baslatildi.")
-
+        self.gui_logger.log_operation(
+            "Proxy Başlatma",
+            {
+                "Adres": str(settings.get("base_url", f"http://{settings.get('host','?')}:{settings.get('port','?')}")),
+                "Servis JSON": str(settings.get("service_json", "?")),
+                "Kanal haritası": str(settings.get("channel_map_file", "?")),
+                "Token TTL": f"{settings.get('token_ttl', 120)} sn",
+            },
+            success=True,
+        )
         self._refresh_proxy_runtime_status()
         return None
 
@@ -1816,8 +1856,16 @@ class FirmwareUpdaterQtApp:
                 if self.proxy_server_thread.is_alive():
                     return "Yerel proxy durdurulurken zaman asimi olustu."
         except Exception as exc:
+            _url = str((self._proxy_runtime_config or {}).get("base_url", "?"))
+            self.gui_logger.log_operation(
+                "Proxy Durdurma",
+                {"Adres": _url},
+                success=False,
+                error=str(exc),
+            )
             return f"Yerel proxy durdurulamadi: {exc}"
 
+        _stopped_url = str((self._proxy_runtime_config or {}).get("base_url", "?"))
         self.proxy_server = None
         self.proxy_server_thread = None
         self._proxy_runtime_config = None
@@ -1826,6 +1874,11 @@ class FirmwareUpdaterQtApp:
         if announce:
             self._append_log("Yerel proxy durduruldu.")
             self._set_admin_status("Yerel proxy durduruldu.")
+        self.gui_logger.log_operation(
+            "Proxy Durdurma",
+            {"Adres": _stopped_url},
+            success=True,
+        )
         self._refresh_proxy_runtime_status()
         return None
 
@@ -1909,6 +1962,12 @@ class FirmwareUpdaterQtApp:
         if error:
             self._refresh_proxy_runtime_status()
             self._append_log(error)
+            self.gui_logger.log_operation(
+                "Proxy Bağlantı Testi",
+                {"Adres": client.base_url},
+                success=False,
+                error=error,
+            )
             QMessageBox.warning(self._dialog_parent(), "Proxy Testi", error)
             return
 
@@ -1918,6 +1977,11 @@ class FirmwareUpdaterQtApp:
         self._refresh_proxy_runtime_status()
         self._append_log(f"Proxy testi basarili: {client.base_url} (ts={ts})")
         self._set_admin_status("Proxy baglanti testi basarili.")
+        self.gui_logger.log_operation(
+            "Proxy Bağlantı Testi",
+            {"Adres": client.base_url, "Sunucu TS": ts},
+            success=True,
+        )
         QMessageBox.information(self._dialog_parent(), "Proxy Testi", f"Proxy erisilebilir:\n{client.base_url}")
 
     def _ensure_local_proxy_available(self) -> Optional[str]:
@@ -1956,6 +2020,12 @@ class FirmwareUpdaterQtApp:
             self.port_combo.clear()
             self.port_combo.addItem("pyserial kurulu degil")
             self._append_log("COM port taramasi atlandi: pyserial bulunamadi.")
+            self.gui_logger.log_operation(
+                "COM Port Tarama",
+                {"Bulunan": "yok"},
+                success=False,
+                error="pyserial kurulu değil",
+            )
             return
 
         ports = [port.device for port in serial_list_ports.comports()]
@@ -1969,6 +2039,11 @@ class FirmwareUpdaterQtApp:
             self.port_combo.addItem("Port bulunamadi")
         self.baud_value_label.setText(str(self.config.get("baud_rate", 115200)))
         self._append_log("COM portlar tarandi: " + (", ".join(ports) if ports else "yok"))
+        self.gui_logger.log_operation(
+            "COM Port Tarama",
+            {"Bulunan": ", ".join(ports) if ports else "yok"},
+            success=True,
+        )
 
     def _scan_folder(self) -> None:
         if self._upload_running:
@@ -2049,6 +2124,14 @@ class FirmwareUpdaterQtApp:
             self._stop_update_animation(str(error or "Dosya bulunamadi"))
             if error:
                 self._append_log(str(error))
+            _channel = self._device_channel(self._get_selected_device())
+            _proxy_url = self.proxy_client.base_url if self.proxy_client else "-"
+            self.gui_logger.log_operation(
+                "Katalog Sorgusu",
+                {"Kanal": _channel or "-", "Proxy": _proxy_url, "Bulunan": "0 dosya"},
+                success=False,
+                error=str(error) if error else "Dosya bulunamadı",
+            )
             return
 
         self.available_files = list(files)
@@ -2070,6 +2153,28 @@ class FirmwareUpdaterQtApp:
             msg += f" ({error})"
         self._stop_update_animation(msg)
         self._append_log("Klasor tarandi: " + msg)
+
+        _channel = self._device_channel(self._get_selected_device())
+        _proxy_url = self.proxy_client.base_url if self.proxy_client else "-"
+        _file_lines = []
+        for item in self.available_files:
+            ver = item.get("version")
+            ver_str = f"v{ver}" if ver is not None else "v?"
+            _file_lines.append(
+                f"{item.get('name', '?')} ({item.get('type', '?')}, {item.get('size', '?')} byte, {ver_str})"
+            )
+        _files_value = "\n".join(_file_lines) if _file_lines else "-"
+        self.gui_logger.log_operation(
+            "Katalog Sorgusu",
+            {
+                "Kanal": _channel or "-",
+                "Proxy": _proxy_url,
+                "Dosyalar": _files_value,
+                "Bulunan": f"{len(self.available_files)} dosya",
+            },
+            success=True,
+            error=str(error) if error else None,
+        )
 
     def _on_firmware_selected(self, _row: int = -1) -> None:
         idx = self.firmware_combo.currentIndex()
@@ -2816,10 +2921,21 @@ class FirmwareUpdaterQtApp:
             self._set_admin_status("STM32 key guncellendi (kaydetmeyi unutmayin).")
             self._stop_status_animation("STM32 key guncelleme basarili.")
             QMessageBox.information(self._dialog_parent(), "Basarili", "STM32 key guncelleme basarili.")
+            self.gui_logger.log_operation(
+                "AES Key Güncelleme",
+                {"Cihaz": device_name},
+                success=True,
+            )
         else:
             self._set_admin_status("STM32 key guncelleme basarisiz.")
             self._stop_status_animation("STM32 key guncelleme basarisiz.")
             QMessageBox.critical(self._dialog_parent(), "Hata", "STM32 key guncelleme basarisiz.")
+            self.gui_logger.log_operation(
+                "AES Key Güncelleme",
+                {"Cihaz": device_name},
+                success=False,
+                error="STM32 key güncelleme başarısız",
+            )
 
     def shutdown(self) -> None:
         stop_error = self._stop_local_proxy_server(announce=False)
