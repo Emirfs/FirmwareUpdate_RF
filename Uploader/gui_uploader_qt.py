@@ -1609,6 +1609,8 @@ class FirmwareUpdaterQtApp:
         stamp = QDateTime.currentDateTime().toString("HH:mm:ss")
         self.log_text.appendPlainText(f"[{stamp}] {message}")
         self.log_text.verticalScrollBar().setValue(self.log_text.verticalScrollBar().maximum())
+        if self._upload_running:
+            self._upload_last_error = message
 
     def _reload_download_clients(self) -> None:
         backend = str(self.config.get("proxy_backend", "")).strip()
@@ -2179,6 +2181,22 @@ class FirmwareUpdaterQtApp:
         self._start_status_animation("Guncelleme devam ediyor")
         self._append_log(f"Secilen firmware: {file_item.get('name', '')} [{file_type}]")
 
+        ver = file_item.get("version")
+        self._pending_upload_log = {
+            "Cihaz": str(device.get("name", "?")),
+            "Kanal": self._device_channel(device) or "-",
+            "Firmware": str(file_item.get("name", "?")),
+            "Tür": str(file_type),
+            "Versiyon": f"v{ver}" if ver is not None else "?",
+            "Boyut": f"{file_item.get('size', '?')} byte",
+            "Mod": "RF" if upload_cfg["is_rf"] else "Seri",
+            "COM Port": str(upload_cfg["serial_port"]),
+            "Baud": str(upload_cfg["baud_rate"]),
+            "Paket boyutu": f"{upload_cfg['packet_size']} byte",
+        }
+        self._upload_start_time = time.time()
+        self._upload_last_error = None
+
         def worker() -> None:
             if target_download_token:
                 if self.proxy_client is None:
@@ -2256,6 +2274,26 @@ class FirmwareUpdaterQtApp:
                 True,
                 "Guncelleme basarisiz. Yeni deneme icin ayarlari kontrol edin.",
             )
+        if self._pending_upload_log is not None and self._upload_start_time is not None:
+            elapsed = time.time() - self._upload_start_time
+            details = dict(self._pending_upload_log)
+            details["Süre"] = f"{elapsed:.1f} sn"
+            if self.stop_requested and not success:
+                self.gui_logger.log_operation(
+                    "Firmware Yükleme",
+                    details,
+                    success=False,
+                    result_label="DURDURULDU",
+                )
+            else:
+                self.gui_logger.log_operation(
+                    "Firmware Yükleme",
+                    details,
+                    success=success,
+                    error=self._upload_last_error if not success else None,
+                )
+        self._pending_upload_log = None
+        self._upload_start_time = None
         self.pending_firmware_version = None
 
         # Upload bitti — monitor bagliysa yeniden basla
