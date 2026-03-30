@@ -43,6 +43,11 @@ class ProxyState:
         self.channel_map = self._load_channel_map()
         self._catalog_cache: Dict[str, Tuple[float, List]] = {}
         self._catalog_lock = threading.Lock()
+        self._auth_fails: Dict[str, Tuple[int, float]] = {}
+        self._auth_lock = threading.Lock()
+        self._AUTH_FAIL_MAX = 10
+        self._AUTH_FAIL_WINDOW = 60.0
+        self._AUTH_BLOCK_TTL = 60.0
         self._channel_map_stat: Tuple[float, int] = self._stat_channel_map()
         self._start_channel_map_watcher()
 
@@ -85,6 +90,34 @@ class ProxyState:
     def _start_channel_map_watcher(self) -> None:
         t = threading.Thread(target=self._channel_map_poll_loop, daemon=True)
         t.start()
+
+    def record_auth_fail(self, ip: str) -> bool:
+        """Başarısız auth kaydeder. True döndürürse IP bloklanmıştır."""
+        now = time.time()
+        with self._auth_lock:
+            count, window_start = self._auth_fails.get(ip, (0, now))
+            if now - window_start > self._AUTH_FAIL_WINDOW:
+                count = 0
+                window_start = now
+            count += 1
+            self._auth_fails[ip] = (count, window_start)
+            return count >= self._AUTH_FAIL_MAX
+
+    def is_auth_blocked(self, ip: str) -> bool:
+        now = time.time()
+        with self._auth_lock:
+            count, window_start = self._auth_fails.get(ip, (0, 0.0))
+            if now - window_start > self._AUTH_BLOCK_TTL:
+                return False
+            return count >= self._AUTH_FAIL_MAX
+
+    def clear_auth_fail(self, ip: str) -> None:
+        now = time.time()
+        with self._auth_lock:
+            self._auth_fails.pop(ip, None)
+            expired = [k for k, (c, t) in self._auth_fails.items() if now - t > 120.0]
+            for k in expired:
+                del self._auth_fails[k]
 
     def resolve_folder_id(self, channel: str) -> Optional[str]:
         entry = self.channel_map.get(channel)
@@ -203,7 +236,11 @@ class FirmwareProxyHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/api/v1/catalog":
-            if not self._authorized():
+            authorized, blocked = self._check_auth()
+            if blocked:
+                _send_json(self, 429, {"error": "cok fazla basarisiz deneme, bekleyin"})
+                return
+            if not authorized:
                 _send_json(self, 401, {"error": "yetkisiz"})
                 return
 
@@ -244,7 +281,11 @@ class FirmwareProxyHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path.startswith("/api/v1/download/"):
-            if not self._authorized():
+            authorized, blocked = self._check_auth()
+            if blocked:
+                _send_json(self, 429, {"error": "cok fazla basarisiz deneme, bekleyin"})
+                return
+            if not authorized:
                 _send_json(self, 401, {"error": "yetkisiz"})
                 return
 
@@ -266,10 +307,18 @@ class FirmwareProxyHandler(BaseHTTPRequestHandler):
 
         _send_json(self, 404, {"error": "bulunamadi"})
 
-    def _authorized(self) -> bool:
+    def _check_auth(self) -> Tuple[bool, bool]:
+        """(authorized, blocked) döndürür."""
+        ip = self.client_address[0]
+        if self.state.is_auth_blocked(ip):
+            return False, True
         expected = self.state.api_key
         provided = self.headers.get("X-Proxy-Key", "")
-        return bool(expected and hmac.compare_digest(expected, provided))
+        if bool(expected and hmac.compare_digest(expected, provided)):
+            self.state.clear_auth_fail(ip)
+            return True, False
+        self.state.record_auth_fail(ip)
+        return False, False
 
 
 def build_proxy_state(api_key: str, service_json: str, channel_map_file: str, token_ttl: int) -> ProxyState:

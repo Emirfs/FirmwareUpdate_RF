@@ -23,6 +23,9 @@ def _make_proxy_state(api_key="testkey", channel_map=None, token_ttl=120):
     state._catalog_lock = threading.Lock()
     state._auth_fails = {}
     state._auth_lock = threading.Lock()
+    state._AUTH_FAIL_MAX = 10
+    state._AUTH_FAIL_WINDOW = 60.0
+    state._AUTH_BLOCK_TTL = 60.0
     state._channel_map_stat = (0.0, 0)
     # Mock drive
     state.drive = MagicMock()
@@ -166,3 +169,40 @@ def test_send_binary_chunks():
         if c[0][0] == "Content-Length"
     ]
     assert content_length_calls[0][0][1] == str(8192 * 2 + 512)
+
+
+def test_rate_limit_blocks_after_10_fails():
+    """10 hatalı denemeden sonra IP bloklanır."""
+    state = _make_proxy_state()
+
+    for _ in range(10):
+        blocked = state.record_auth_fail("1.2.3.4")
+
+    assert blocked is True
+    assert state.is_auth_blocked("1.2.3.4") is True
+
+
+def test_rate_limit_resets_after_window():
+    """60 saniyelik pencere geçince blok kalkar."""
+    state = _make_proxy_state()
+
+    for _ in range(10):
+        state.record_auth_fail("1.2.3.4")
+
+    # Zamanı geçmişe al
+    state._auth_fails["1.2.3.4"] = (10, time.time() - 61)
+
+    assert state.is_auth_blocked("1.2.3.4") is False
+
+
+def test_rate_limit_clears_on_success():
+    """Başarılı auth sonrası hata sayacı sıfırlanır."""
+    state = _make_proxy_state()
+
+    for _ in range(5):
+        state.record_auth_fail("1.2.3.4")
+
+    state.clear_auth_fail("1.2.3.4")
+
+    assert state.is_auth_blocked("1.2.3.4") is False
+    assert "1.2.3.4" not in state._auth_fails
