@@ -154,6 +154,9 @@ class FirmwareProxyHttpServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
 
+_CHUNK_SIZE = 8192
+
+
 def _send_json(handler: BaseHTTPRequestHandler, status: int, payload: Dict[str, Any]) -> None:
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     handler.send_response(status)
@@ -163,14 +166,23 @@ def _send_json(handler: BaseHTTPRequestHandler, status: int, payload: Dict[str, 
     handler.wfile.write(body)
 
 
-def _send_binary(handler: BaseHTTPRequestHandler, name: str, data: bytes) -> None:
+def _send_binary(handler: BaseHTTPRequestHandler, name: str, data: "io.BytesIO") -> None:
+    start = data.tell()
+    data.seek(0, 2)
+    total = data.tell() - start
+    data.seek(start)
+
     handler.send_response(200)
     handler.send_header("Content-Type", "application/octet-stream")
     quoted_name = urllib.parse.quote(name)
     handler.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quoted_name}")
-    handler.send_header("Content-Length", str(len(data)))
+    handler.send_header("Content-Length", str(total))
     handler.end_headers()
-    handler.wfile.write(data)
+    while True:
+        chunk = data.read(_CHUNK_SIZE)
+        if not chunk:
+            break
+        handler.wfile.write(chunk)
 
 
 class FirmwareProxyHandler(BaseHTTPRequestHandler):
@@ -249,7 +261,7 @@ class FirmwareProxyHandler(BaseHTTPRequestHandler):
                 _send_json(self, 502, {"error": download_error or "drive indirme hatasi"})
                 return
 
-            _send_binary(self, file_name, file_data.read())
+            _send_binary(self, file_name, file_data)
             return
 
         _send_json(self, 404, {"error": "bulunamadi"})

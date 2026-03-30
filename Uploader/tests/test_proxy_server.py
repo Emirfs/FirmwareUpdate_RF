@@ -140,3 +140,29 @@ def test_stat_channel_map_returns_zero_on_oserror():
     with patch("firmware_proxy_server.os.stat", side_effect=OSError):
         result = state._stat_channel_map()
     assert result == (0.0, 0)
+
+
+def test_send_binary_chunks():
+    """_send_binary BytesIO'yu 8KB chunk'larla gönderir."""
+    import io
+    from firmware_proxy_server import _send_binary
+
+    # 20KB veri — en az 3 chunk gerekir
+    data = io.BytesIO(b"x" * (8192 * 2 + 512))
+
+    written_chunks = []
+    handler = MagicMock()
+    handler.wfile.write.side_effect = lambda chunk: written_chunks.append(len(chunk))
+
+    _send_binary(handler, "test.bin", data)
+
+    assert len(written_chunks) == 3
+    assert written_chunks[0] == 8192
+    assert written_chunks[1] == 8192
+    assert written_chunks[2] == 512
+    # Content-Length doğru gönderildi
+    content_length_calls = [
+        c for c in handler.send_header.call_args_list
+        if c[0][0] == "Content-Length"
+    ]
+    assert content_length_calls[0][0][1] == str(8192 * 2 + 512)
