@@ -15,6 +15,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from drive_manager import DriveManager
 
 
+_ERR_UNKNOWN_CHANNEL = "kanal bulunamadi"
+
+
 def _json_bytes(payload: Dict[str, Any]) -> bytes:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
@@ -29,6 +32,8 @@ def _b64url_decode(data: str) -> bytes:
 
 
 class ProxyState:
+    _CATALOG_TTL: float = 60.0
+
     def __init__(self, api_key: str, service_json: str, channel_map_file: str, token_ttl: int) -> None:
         self.api_key = api_key
         self.service_json = service_json
@@ -38,7 +43,6 @@ class ProxyState:
         self.channel_map = self._load_channel_map()
         self._catalog_cache: Dict[str, Tuple[float, List]] = {}
         self._catalog_lock = threading.Lock()
-        self._CATALOG_TTL = 60.0
 
     def _load_channel_map(self) -> Dict[str, Any]:
         if not self.channel_map_file or not os.path.exists(self.channel_map_file):
@@ -65,22 +69,18 @@ class ProxyState:
     def get_catalog(self, channel: str) -> Tuple[Optional[List], Optional[str]]:
         folder_id = self.resolve_folder_id(channel)
         if not folder_id:
-            return None, "kanal bulunamadi"
+            return None, _ERR_UNKNOWN_CHANNEL
 
         now = time.time()
         with self._catalog_lock:
             cached = self._catalog_cache.get(channel)
             if cached is not None and (now - cached[0]) < self._CATALOG_TTL:
                 return cached[1], None
-
-        files, error = self.drive.list_all_files_in_folder(folder_id)
-        if files is None:
-            return None, error
-
-        with self._catalog_lock:
+            files, error = self.drive.list_all_files_in_folder(folder_id)
+            if files is None:
+                return None, error
             self._catalog_cache[channel] = (time.time(), files)
-
-        return files, error
+            return files, error
 
     def make_download_token(self, channel: str, file_item: Dict[str, Any]) -> str:
         now = int(time.time())
@@ -175,7 +175,7 @@ class FirmwareProxyHandler(BaseHTTPRequestHandler):
 
             files, error = self.state.get_catalog(channel)
             if files is None:
-                status_code = 404 if error == "kanal bulunamadi" else 502
+                status_code = 404 if error == _ERR_UNKNOWN_CHANNEL else 502
                 _send_json(self, status_code, {"error": error or "drive catalog hatasi"})
                 return
 

@@ -77,3 +77,14 @@ def test_catalog_cache_cleared_on_reload():
         state.reload()
 
     assert state._catalog_cache == {}
+
+
+def test_catalog_unknown_channel_returns_none():
+    """Bilinmeyen kanal için None ve hata mesajı döner."""
+    state = _make_proxy_state(channel_map={"other-channel": "folder_xyz"})
+
+    files, error = state.get_catalog("nonexistent-channel")
+
+    assert files is None
+    assert error is not None
+    state.drive.list_all_files_in_folder.assert_not_called()
