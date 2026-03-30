@@ -165,6 +165,7 @@ def test_result_label_override():
         content = _read(path)
         assert "DURDURULDU" in content
         assert "HATA" not in content
+        assert "BASARILI" not in content
     finally:
         os.unlink(path)
 

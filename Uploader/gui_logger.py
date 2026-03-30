@@ -14,7 +14,23 @@ class GUILogger:
     def __init__(self, log_path: str) -> None:
         self._log_path = log_path
         self._lock = threading.Lock()
-        self._current_date: str = ""
+        self._current_date: str = self._read_last_date()
+
+    def _read_last_date(self) -> str:
+        """Mevcut log dosyasindaki son tarih separator'ini okur.
+
+        Ayni gun restart'ta duplicate separator yazilmasini onler.
+        """
+        import re as _re
+        try:
+            if not os.path.exists(self._log_path):
+                return ""
+            with open(self._log_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            matches = _re.findall(r"^=== (\d{4}-\d{2}-\d{2}) ===$", content, _re.MULTILINE)
+            return matches[-1] if matches else ""
+        except OSError:
+            return ""
 
     def log_operation(
         self,
