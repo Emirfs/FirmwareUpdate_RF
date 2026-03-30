@@ -43,6 +43,8 @@ class ProxyState:
         self.channel_map = self._load_channel_map()
         self._catalog_cache: Dict[str, Tuple[float, List]] = {}
         self._catalog_lock = threading.Lock()
+        self._channel_map_stat: Tuple[float, int] = self._stat_channel_map()
+        self._start_channel_map_watcher()
 
     def _load_channel_map(self) -> Dict[str, Any]:
         if not self.channel_map_file or not os.path.exists(self.channel_map_file):
@@ -57,6 +59,31 @@ class ProxyState:
         self.channel_map = self._load_channel_map()
         with self._catalog_lock:
             self._catalog_cache.clear()
+
+    def _stat_channel_map(self) -> Tuple[float, int]:
+        try:
+            s = os.stat(self.channel_map_file)
+            return s.st_mtime, s.st_size
+        except OSError:
+            return 0.0, 0
+
+    def _poll_channel_map_once(self) -> None:
+        current = self._stat_channel_map()
+        if current != self._channel_map_stat:
+            self.reload()
+            self._channel_map_stat = current
+
+    def _channel_map_poll_loop(self) -> None:
+        while True:
+            time.sleep(5)
+            try:
+                self._poll_channel_map_once()
+            except Exception:
+                pass
+
+    def _start_channel_map_watcher(self) -> None:
+        t = threading.Thread(target=self._channel_map_poll_loop, daemon=True)
+        t.start()
 
     def resolve_folder_id(self, channel: str) -> Optional[str]:
         entry = self.channel_map.get(channel)

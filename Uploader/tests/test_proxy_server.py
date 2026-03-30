@@ -23,6 +23,7 @@ def _make_proxy_state(api_key="testkey", channel_map=None, token_ttl=120):
     state._catalog_lock = threading.Lock()
     state._auth_fails = {}
     state._auth_lock = threading.Lock()
+    state._channel_map_stat = (0.0, 0)
     # Mock drive
     state.drive = MagicMock()
     return state
@@ -87,3 +88,47 @@ def test_catalog_unknown_channel_returns_none():
     assert files is None
     assert error is not None
     state.drive.list_all_files_in_folder.assert_not_called()
+
+
+def test_channel_map_reload_on_file_change():
+    """_poll_channel_map_once mtime değişince reload çağırır."""
+    state = _make_proxy_state()
+    state._channel_map_stat = (1000.0, 100)
+
+    reload_called = []
+
+    def mock_reload():
+        reload_called.append(True)
+        state._catalog_cache.clear()
+        state.channel_map = {"test-channel": "folder_abc"}
+
+    state.reload = mock_reload
+
+    # Farklı mtime/size simüle et
+    new_stat = MagicMock()
+    new_stat.st_mtime = 2000.0
+    new_stat.st_size = 200
+
+    with patch("os.stat", return_value=new_stat):
+        state._poll_channel_map_once()
+
+    assert len(reload_called) == 1
+    assert state._channel_map_stat == (2000.0, 200)
+
+
+def test_channel_map_no_reload_if_unchanged():
+    """mtime ve size değişmediyse reload çağrılmaz."""
+    state = _make_proxy_state()
+    state._channel_map_stat = (1000.0, 100)
+
+    reload_called = []
+    state.reload = lambda: reload_called.append(True)
+
+    unchanged_stat = MagicMock()
+    unchanged_stat.st_mtime = 1000.0
+    unchanged_stat.st_size = 100
+
+    with patch("os.stat", return_value=unchanged_stat):
+        state._poll_channel_map_once()
+
+    assert len(reload_called) == 0
