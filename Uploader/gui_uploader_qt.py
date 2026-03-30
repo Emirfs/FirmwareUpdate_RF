@@ -1,6 +1,7 @@
 ﻿import os
 import sys
 import threading
+import time
 import urllib.parse
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -58,6 +59,7 @@ from drive_manager import DriveManager
 from firmware_proxy_client import FirmwareProxyClient
 from firmware_proxy_server import create_proxy_server
 from uploder import update_stm32_key, upload_firmware
+from gui_logger import GUILogger
 
 
 def resource_path(*parts: str) -> str:
@@ -90,6 +92,12 @@ class FirmwareUpdaterQtApp:
         self.pending_firmware_version: Optional[int] = None
         self.stop_requested = False
         self.upload_thread: Optional[threading.Thread] = None
+        self._upload_last_error: Optional[str] = None
+        self._pending_upload_log: Optional[Dict[str, str]] = None
+        self._upload_start_time: Optional[float] = None
+
+        _log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gui.log")
+        self.gui_logger = GUILogger(_log_path)
 
         self.device_monitor: Optional[DeviceMonitor] = None
         self._monitor_dialog: Optional[QDialog] = None
@@ -398,6 +406,11 @@ class FirmwareUpdaterQtApp:
         )
         sb.addPermanentWidget(self._monitor_open_btn)
 
+        self._log_clear_btn = QPushButton("Logu Temizle")
+        self._log_clear_btn.setProperty("role", "subtle")
+        self._log_clear_btn.setFixedWidth(110)
+        sb.addPermanentWidget(self._log_clear_btn)
+
     def _connect_ui(self) -> None:
         self.admin_login_button.clicked.connect(self._show_admin_login_dialog)
         self.back_step_button.clicked.connect(self._go_step_back)
@@ -412,6 +425,7 @@ class FirmwareUpdaterQtApp:
         self.new_update_button.clicked.connect(self._reset_for_new_update)
         self.edit_settings_button.clicked.connect(self._jump_to_settings)
         self._monitor_open_btn.clicked.connect(self._open_device_monitor_dialog)
+        self._log_clear_btn.clicked.connect(self.log_text.clear)
 
     def _hide_legacy_admin_tab(self) -> None:
         return
