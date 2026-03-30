@@ -21,7 +21,6 @@ def _make_proxy_state(api_key="testkey", channel_map=None, token_ttl=120):
     state.channel_map_file = "fake_channels.json"
     state._catalog_cache = {}
     state._catalog_lock = threading.Lock()
-    state._CATALOG_TTL = 60.0
     state._auth_fails = {}
     state._auth_lock = threading.Lock()
     # Mock drive
