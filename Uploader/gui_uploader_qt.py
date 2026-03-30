@@ -2399,6 +2399,7 @@ class FirmwareUpdaterQtApp:
                 )
         self._pending_upload_log = None
         self._upload_start_time = None
+        self._upload_last_error = None
         self.pending_firmware_version = None
 
         # Upload bitti — monitor bagliysa yeniden basla
