@@ -123,12 +123,13 @@ void SI4432_Init(void) {
 	// ==========================================
 	// PAKET YAPILANDIRMASI (resmi örnekten)
 	// ==========================================
-	SI4432_WriteReg(0x34, 0x0A); // Preamble Length = 5 bytes (10 nibble)
-	SI4432_WriteReg(0x33, 0x02); // Header Control 2: no headers, variable len, sync word 3&2
+	SI4432_WriteReg(0x34, 0x10); // Preamble Length = 8 bytes (16 nibble) — gurultu direnci icin uzatildi
+	SI4432_WriteReg(0x33, 0x06); // Header Control 2: variable len, sync word 3,2&1 (3 byte)
 	SI4432_WriteReg(0x36, 0x2D); // Sync Word 3
 	SI4432_WriteReg(0x37, 0xD4); // Sync Word 2
+	SI4432_WriteReg(0x38, 0xAA); // Sync Word 1 — 3. sync byte, false sync olasiligini 256x dusurur
 	SI4432_WriteReg(0x32, 0x00); // Header Control 1: disable header filters
-	SI4432_WriteReg(0x35, 0x28); // Preamble Detection: 20 bits threshold
+	SI4432_WriteReg(0x35, 0x30); // Preamble Detection: 24 bits threshold (preamble uzamasiyla uyumlu)
 
 	// TX: packet handler + CRC-IBM
 	SI4432_WriteReg(0x30, 0x0D); // Data Access Control (TX)

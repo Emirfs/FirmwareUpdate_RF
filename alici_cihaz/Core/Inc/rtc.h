@@ -32,6 +32,8 @@ extern "C" {
 
 /* USER CODE END Includes */
 
+#ifdef HAL_RTC_MODULE_ENABLED
+
 extern RTC_HandleTypeDef hrtc;
 
 /* USER CODE BEGIN Private defines */
@@ -39,6 +41,8 @@ extern RTC_HandleTypeDef hrtc;
 /* USER CODE END Private defines */
 
 void MX_RTC_Init(void);
+
+#endif /* HAL_RTC_MODULE_ENABLED */
 
 /* USER CODE BEGIN Prototypes */
 

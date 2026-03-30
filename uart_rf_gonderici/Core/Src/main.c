@@ -74,7 +74,7 @@ int main(void) {
    * Diger deger: baglanti sorunu veya yanlis cihaz. */
   uint8_t dev = SI4432_ReadReg(0x00);
   if (dev != 0x08) {
-    Print("\r\n[HATA] Si4432 bulunamadi!\r\n");
+    SendDiag(DIAG_LEVEL_ERROR, DIAG_ERR_SI4432_INIT, "Si4432 bulunamadi - SPI/kablo kontrol edin");
     /* Si4432 bulunamadi — LED hizli yanip sonsun, sonsuz dongu */
     while (1) {
       HAL_GPIO_TogglePin(LED0_GPIO_Port, LED0_Pin);
@@ -98,6 +98,7 @@ int main(void) {
   PrintHex(dev); // 0x08 olmali
   Print("\r\nMesaj yaz + Enter (normal mod)\r\n");
   Print("'W' gondererek FW update modu baslatilir\r\n\r\n");
+  SendDiag(DIAG_LEVEL_INFO, DIAG_INFO_READY, "Si4432 OK - Gonderici hazir");
 
   /* Ana dongu */
   while (1) {

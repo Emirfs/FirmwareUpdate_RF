@@ -9,10 +9,19 @@
 #ifndef BOOT_FLOW_H
 #define BOOT_FLOW_H
 
+#include <stdint.h>
+
 /* Flash'taki uygulamaya atla (geri donmez — uygulama calismaya baslar) */
 void jump_to_application(void);
 
-/* RF firmware guncelleme ana dongusu (tamamlaniinca NVIC_SystemReset cagrılir) */
-void Bootloader_Main(void);
+/*
+ * RF firmware guncelleme ana dongusu.
+ *
+ * pub_sender_hint : main.c 3s pencereden alinan BOOT_REQUEST'in pub_sender alani (32 byte).
+ *                   NULL ise Bootloader_Main BOOT_REQUEST icin RF'i dinler.
+ *                   NULL degil ise ECDH hemen gerceklestirilir (sender BOOT_ACK sonrasi
+ *                   BOOT_REQUEST gondermez, bu yuzden hint gereklidir).
+ */
+void Bootloader_Main(const uint8_t *pub_sender_hint);
 
 #endif /* BOOT_FLOW_H */

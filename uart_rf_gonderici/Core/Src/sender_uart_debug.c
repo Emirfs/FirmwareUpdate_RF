@@ -60,3 +60,24 @@ void PrintBuf(const uint8_t *b, uint16_t n) {
   }
   HAL_UART_Transmit(&huart1, (uint8_t *)b, n, 500);
 }
+
+/* Yapilandirilmis tani mesaji gonder: [E:01] mesaj\r\n
+ * fw_debug_en=0 ise (FW update modu) sessiz kalir — UART binary protokol icindir. */
+void SendDiag(char level, uint8_t code, const char *msg) {
+  if (!fw_debug_en) {
+    return;
+  }
+
+  const char hex[] = "0123456789ABCDEF";
+  uint8_t prefix[7] = {
+    '[', (uint8_t)level, ':',
+    hex[(code >> 4) & 0x0FU],
+    hex[code & 0x0FU],
+    ']', ' '
+  };
+  HAL_UART_Transmit(&huart1, prefix, 7U, 100U);
+  if (msg != NULL) {
+    HAL_UART_Transmit(&huart1, (uint8_t *)msg, (uint16_t)strlen(msg), 500U);
+  }
+  HAL_UART_Transmit(&huart1, (uint8_t *)"\r\n", 2U, 50U);
+}

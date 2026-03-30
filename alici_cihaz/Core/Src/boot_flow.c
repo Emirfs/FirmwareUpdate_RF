@@ -59,6 +59,13 @@
 #include "si4432.h"
 #include <string.h>
 
+/* Derleyici optimizasyonunu atlayan güvenli bellek sıfırlama.
+ * Standart memset() "dead store" olarak kaldırılabilir; volatile zorunlu. */
+static void secure_zero(void *ptr, uint32_t len) {
+	volatile uint8_t *p = (volatile uint8_t *) ptr;
+	while (len--) *p++ = 0;
+}
+
 /* Fallback AES key — ECDH basarisiz olursa ve KEY_STORE bossa kullanilir.
  * Normal akista bu key HICBIR ZAMAN kullanilmaz; ECDH session key kullanilir. */
 static const uint8_t DEFAULT_AES_KEY[32] = { 0x31, 0x32, 0x33, 0x34, 0x35, 0x36,
@@ -163,7 +170,7 @@ void jump_to_application(void) {
  *   ADIM 7: Tum paketler bitti → Flash CRC dogrulama
  *   ADIM 8: UPDATE_COMPLETE/FAILED gonder → uygulamaya atla
  */
-void Bootloader_Main(void) {
+void Bootloader_Main(const uint8_t *pub_sender_hint) {
 	struct AES_ctx aes_ctx;       // AES context (sifre cozme icin)
 	Firmware_Metadata_t metadata; // Gondericiden gelen firmware bilgileri
 	uint32_t total_packets = 0;   // Beklenen toplam paket sayisi (metadata'dan)
@@ -175,6 +182,7 @@ void Bootloader_Main(void) {
 	uint8_t ecdh_pub[32];
 	entropy_generate(ecdh_priv, 32); /* UID + ADC + SysTick */
 	c25519_prepare(ecdh_priv); /* Bit clamp (Curve25519 gerekliligi) */
+	HAL_IWDG_Refresh(&hiwdg); /* c25519_smult ~300-800ms — onceden sifirla */
 	c25519_smult(ecdh_pub, c25519_base_x, ecdh_priv); /* pub = priv * G */
 
 	/* AES session key baslangic degeri: KEY_STORE varsa kalici key yukle,
@@ -185,9 +193,20 @@ void Bootloader_Main(void) {
 
 	LED_Bootloader(); // NeoPixel turuncu — bootloader aktif
 
+	/* 60s boşta bekleme için giriş zamanı — metadata ve veri transfer
+	 * aşamalarında kullanılır; 60s boyunca hiç paket gelmezse temiz çıkış. */
+	uint32_t bootloader_entry_tick = HAL_GetTick();
+
 	/* ===================================================================
 	 * ADIM 1: Si4432 RF MODUL BASLATMA
+	 *
+	 * EXTI4_15 (Si4432 nIRQ) polling tabanli SI4432_CheckRx() ile catisiyor:
+	 * EXTI GPIO bekleyen bitini temizler ama Si4432 IRQ register'larini (0x03/0x04)
+	 * temizlemez. Bu durum nIRQ'nun LOW kalmasina ve her polling cagrisinda
+	 * sahte veri okunmasina yol acar. Bootloader boyunca polling kullanilacagi
+	 * icin EXTI4_15 burada devre disi birakilir.
 	 * =================================================================== */
+	HAL_NVIC_DisableIRQ(EXTI4_15_IRQn);
 	SI4432_Init();
 	HAL_Delay(10);
 
@@ -235,7 +254,29 @@ void Bootloader_Main(void) {
 		uint8_t got_metadata = 0;
 		uint8_t ecdh_done = 0; /* Session key turetti mi? */
 
+		/* ── Hint tabanli ECDH ────────────────────────────────────────────
+		 * main.c 3s penceresi BOOT_REQUEST'i alip pub_sender'i buraya iletmis.
+		 * Sender BOOT_ACK aldiktan sonra BOOT_REQUEST gondermez; beklersek
+		 * ecdh_done asla 1 olmaz ve sifreleme DEFAULT/KEY_STORE key'e dusar.
+		 * Hemen ECDH yap, sender BOOT_ACK aldiktan sonra metadata gonderecek. */
+		if (pub_sender_hint != NULL) {
+			uint8_t shared[32];
+			HAL_IWDG_Refresh(&hiwdg); /* c25519_smult ~300-800ms — onceden sifirla */
+			c25519_smult(shared, pub_sender_hint, ecdh_priv);
+			memcpy(AES_KEY, shared, 32);
+			secure_zero(shared, 32);
+			secure_zero(ecdh_priv, 32); /* Kullanilmayacak — temizle */
+			ecdh_done = 1;
+		}
+
 		while (!got_metadata) {
+			/* 60s boyunca metadata gelmedi → eski uygulamaya dön */
+			if (HAL_GetTick() - bootloader_entry_tick > BOOTLOADER_IDLE_TIMEOUT_MS) {
+				clear_boot_flag(); /* Boot flag temizle: bir sonraki reset'te uygulama çalışsın */
+				LED_Off();
+				return;
+			}
+
 			HAL_IWDG_Refresh(&hiwdg);
 
 			/* BOOT_ACK gonder — 36 byte payload (resume_start + pub_receiver) */
@@ -258,14 +299,15 @@ void Bootloader_Main(void) {
 
 					/* Shared secret = X25519(own_priv, pub_sender) */
 					uint8_t shared[32];
+					HAL_IWDG_Refresh(&hiwdg); /* c25519_smult ~300-800ms — onceden sifirla */
 					c25519_smult(shared, pub_sender, ecdh_priv);
 
 					/* Session key = shared secret (AES-256 key olarak kullan) */
 					memcpy(AES_KEY, shared, 32);
 
 					/* Private key'i RAM'den temizle — artik kullanilmayacak */
-					memset(ecdh_priv, 0, 32);
-					memset(shared, 0, 32);
+					secure_zero(ecdh_priv, 32);
+					secure_zero(shared, 32);
 
 					ecdh_done = 1;
 				}
@@ -273,6 +315,16 @@ void Bootloader_Main(void) {
 				if (rx_type == RF_CMD_METADATA && rx_pld_len >= 12) {
 					/* Metadata alindi — firmware_size, version, crc32 doldur */
 					memcpy(&metadata, rx_pld, sizeof(Firmware_Metadata_t));
+
+					/* firmware_size dogrulama: 0 veya uygulama alani disinda → reddet */
+					if (metadata.firmware_size == 0
+							|| metadata.firmware_size > APP_AREA_SIZE) {
+						RF_SendPacket(RF_CMD_UPDATE_FAILED, rx_seq,
+								(uint8_t[] ) { RF_ERR_INVALID_MSP }, 1);
+						LED_Error();
+						return;
+					}
+
 					total_packets =
 							(metadata.firmware_size + FW_PACKET_SIZE - 1)
 									/ FW_PACKET_SIZE;
@@ -323,16 +375,16 @@ void Bootloader_Main(void) {
 			HAL_Delay(200); // Kisa bekleme sonra tekrar BOOT_ACK gonder
 		}
 
-		/* ECDH tamamlanmadiysa (gonderici eski protokol kullaniyorsa) fallback */
+		/* ECDH tamamlanmadiysa güncellemeyi reddet — session key olmadan güvensiz */
 		if (!ecdh_done) {
-			/* Eski cihazlarla uyumluluk: KEY_STORE yoksa DEFAULT kullan */
-			if (!KeyStore_Read(AES_KEY)) {
-				memcpy(AES_KEY, DEFAULT_AES_KEY, 32);
-			}
+			RF_SendPacket(RF_CMD_UPDATE_FAILED, rf_seq_counter++,
+					(uint8_t[] ) { RF_ERR_AES_FAIL }, 1);
+			LED_Error();
+			return;
 		}
 
 		/* Private key her durumda temizle */
-		memset(ecdh_priv, 0, 32);
+		secure_zero(ecdh_priv, 32);
 
 		/* Resume state henuz baslatilmamissa (ilk transfer), simdi baslat.
 		 * RESUME_MAGIC zaten yaziliysa (kaldigi yerden devam), dokunma. */
@@ -415,6 +467,9 @@ void Bootloader_Main(void) {
 		fw_chunks_received = 0;
 		memset(fw_assembly_buf, 0, sizeof(fw_assembly_buf));
 
+		/* Son başarılı DATA_CHUNK alım zamanı; 60s geçerse temiz çıkış */
+		uint32_t last_chunk_tick = HAL_GetTick();
+
 		while (packets_received < total_packets) {
 			HAL_IWDG_Refresh(&hiwdg);
 			LED_Transfer(packets_received); // Mavi/mor yanip sonsun — transfer gostergesi
@@ -423,14 +478,16 @@ void Bootloader_Main(void) {
 			uint16_t rx_seq;
 			uint8_t rx_pld_len;
 
-			/* Paket bekle — RF_UPDATE_TIMEOUT (60sn) icinde gelmezse hata */
-			if (!RF_WaitForPacket(&rx_type, &rx_seq, rx_pld, &rx_pld_len,
-			RF_UPDATE_TIMEOUT)) {
-				/* Zaman asimi — guncelleme basarisiz */
-				RF_SendPacket(RF_CMD_UPDATE_FAILED, rf_seq_counter++,
-						(uint8_t[] ) { RF_ERR_TIMEOUT }, 1);
-				LED_Error();
-				return;
+			/* 5s'de bir poll et; toplam 60s aktivite yoksa temiz çıkış */
+			if (!RF_WaitForPacket(&rx_type, &rx_seq, rx_pld, &rx_pld_len, 5000)) {
+				if (HAL_GetTick() - last_chunk_tick > BOOTLOADER_IDLE_TIMEOUT_MS) {
+					/* 60s boyunca hiç DATA_CHUNK gelmedi — gönderici kesilmiş.
+					 * Boot flag'i silmiyoruz: resume bitmap geçerli, bir sonraki
+					 * bağlantıda kaldığı yerden devam edilebilir. */
+					LED_Off();
+					return;
+				}
+				continue; /* Henüz 60s dolmadı — beklemeye devam */
 			}
 
 			if (rx_type != RF_CMD_DATA_CHUNK) {
@@ -474,6 +531,7 @@ void Bootloader_Main(void) {
 			fw_chunks_received++;
 
 			RF_SendPacket(RF_CMD_ACK, rx_seq, NULL, 0); // Chunk alindi onaylandi
+			last_chunk_tick = HAL_GetTick(); /* Aktivite zamanlayicisini sifirla */
 
 			/* 4 chunk tamam → 148 byte'i isle */
 			if (fw_chunks_received >= RF_CHUNKS_PER_PACKET) {
@@ -627,6 +685,9 @@ void Bootloader_Main(void) {
 
 	LED_Success(); // Yesil yanip sonsun — basarili guncelleme
 	HAL_Delay(1000);
+
+	/* Session key'i RAM'den temizle — uygulama bu veriye erisemesin */
+	secure_zero(AES_KEY, sizeof(AES_KEY));
 
 	jump_to_application(); // Yeni firmware'i calistir
 }

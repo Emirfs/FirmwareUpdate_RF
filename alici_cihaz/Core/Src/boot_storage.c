@@ -204,6 +204,13 @@ void Flash_Erase_Application(void) {
  * Kullanim yeri: boot_flow.c — Data chunk yazma dongusu
  */
 void Flash_Erase_Page(uint32_t page_addr) {
+  /* Güvenlik: yalnızca uygulama alanı (sayfa 16-126) silinebilir */
+  if (page_addr < APP_ADDRESS
+      || page_addr >= (APP_ADDRESS + APP_AREA_SIZE)
+      || (page_addr % FLASH_PAGE_SIZE) != 0) {
+    return; /* Güvensiz adres — işlemi reddet */
+  }
+
   HAL_FLASH_Unlock();
 
   FLASH_EraseInitTypeDef erase;

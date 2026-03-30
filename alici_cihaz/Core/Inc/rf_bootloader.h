@@ -179,11 +179,12 @@
 // Protokol Zamanlayıcıları
 // =========================================================================
 
-#define RF_ACK_TIMEOUT_MS 2000       // ACK bekleme süresi
-#define RF_BOOT_REQUEST_INTERVAL 500 // Boot request tekrar süresi
-#define RF_MAX_RETRIES 5             // Maksimum yeniden deneme
-#define RF_FLASH_ERASE_TIMEOUT 30000 // Flash silme timeout
-#define RF_UPDATE_TIMEOUT 60000      // Toplam güncelleme timeout (paket başı)
+#define RF_ACK_TIMEOUT_MS 2000         // ACK bekleme süresi
+#define RF_BOOT_REQUEST_INTERVAL 500   // Boot request tekrar süresi
+#define RF_MAX_RETRIES 5               // Maksimum yeniden deneme
+#define RF_FLASH_ERASE_TIMEOUT 30000   // Flash silme timeout
+#define RF_UPDATE_TIMEOUT 60000        // Toplam güncelleme timeout (paket başı)
+#define BOOTLOADER_IDLE_TIMEOUT_MS 60000U // Boşta bekleme: 60s sonra temiz çıkış
 
 // =========================================================================
 // Hata Kodları

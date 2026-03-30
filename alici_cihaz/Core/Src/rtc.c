@@ -20,6 +20,9 @@
 /* Includes ------------------------------------------------------------------*/
 #include "rtc.h"
 
+/* Bootloader'da RTC kullanilmiyor — HAL_RTC_MODULE_ENABLED devre disi */
+#ifdef HAL_RTC_MODULE_ENABLED
+
 /* USER CODE BEGIN 0 */
 
 /* USER CODE END 0 */
@@ -112,3 +115,5 @@ void HAL_RTC_MspDeInit(RTC_HandleTypeDef *rtcHandle) {
 /* USER CODE BEGIN 1 */
 
 /* USER CODE END 1 */
+
+#endif /* HAL_RTC_MODULE_ENABLED */

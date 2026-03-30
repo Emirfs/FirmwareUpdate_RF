@@ -70,9 +70,8 @@ int main(void) {
 	MX_IWDG_Init();        // Watchdog — sonsuz dongu koruması
 	MX_TIM17_Init();       // NeoPixel zamanlayicisi (tim.c)
 	MX_TIM6_Init();        // NeoPixel IC zamanlayicisi
-	MX_TIM16_Init();       // Timer (rezerve)
-	MX_TIM3_Init();        // Timer (rezerve)
-	MX_RTC_Init();         // RTC — LSI ile calisiyor (IWDG icin)
+	/* TIM16, TIM3 — rezerve, bootloader'da kullanilmiyor, init atlanıyor */
+	/* RTC — bootloader'da kullanilmiyor; LSI zaten SystemClock_Config'de aktif */
 
 	/* NeoPixel LED baslatma */
 	NeoPixel_Init();
@@ -98,8 +97,8 @@ int main(void) {
 	/* 1. Boot flag kontrolu */
 	if (check_boot_flag()) {
 		/* BOOT_FLAG_ADDRESS'de MAGIC + REQUEST var → bootloader moduna gec */
-		Bootloader_Main();   // RF uzerinden firmware guncelle
-		NVIC_SystemReset();  // Bittikten sonra sistemi yeniden basla
+		Bootloader_Main(NULL); // RF uzerinden firmware guncelle (pub_sender hint yok)
+		NVIC_SystemReset();    // Bittikten sonra sistemi yeniden basla
 	}
 
 	/* 2. Gecerli uygulama var mi? (MSP'nin 0x2000xxxx olmasi gerekiyor) */
@@ -107,6 +106,10 @@ int main(void) {
 	if ((app_msp & 0xFFF00000) == 0x20000000) {
 		/* Gecerli uygulama var — ama once 3 saniye RF dinle */
 		/* Bu sayede gonderici uzaktan bootloader'i tetikleyebilir */
+
+		/* EXTI4_15 (Si4432 nIRQ) bootloader polling ile catisiyor — devre disi birak */
+		HAL_NVIC_DisableIRQ(EXTI4_15_IRQn);
+
 		SI4432_Init();
 		HAL_Delay(10);
 
@@ -126,7 +129,16 @@ int main(void) {
 					/* Gonderici bootloader istiyor → bootloader moduna gec */
 					NeoPixel_SetAll(255, 128, 0); // Turuncu — bootloader'a geciliyor
 					NeoPixel_Show();
-					Bootloader_Main();
+
+					/* Boot flag SET: Bootloader_Main basarisiz olursa reset sonrasi
+					 * dogrudan buraya girer (3s pencere beklemez, hizli yeniden deneme). */
+					set_boot_flag();
+
+					/* pub_sender (32 byte) BOOT_REQUEST payload'inda; ECDH icin hint.
+					 * Sender BOOT_ACK aldiktan sonra BOOT_REQUEST gondermez — hint
+					 * olmadan Bootloader_Main ECDH'yi hicbir zaman tamamlayamaz. */
+					const uint8_t *pub_hint = (rx_pld_len >= ECDH_KEY_SIZE) ? rx_pld : NULL;
+					Bootloader_Main(pub_hint);
 					NVIC_SystemReset();
 				}
 			}
@@ -139,7 +151,7 @@ int main(void) {
 	}
 
 	/* 3. Gecerli uygulama yok → bootloader'da kal (ilk programlama) */
-	Bootloader_Main();
+	Bootloader_Main(NULL); // pub_sender yok; loop icinde BOOT_REQUEST beklenir
 	NVIC_SystemReset();
 
 	/* Buraya hic ulasilmamali */

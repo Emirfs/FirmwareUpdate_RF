@@ -53,6 +53,7 @@ from config_manager import (
     save_config,
     verify_admin,
 )
+from device_monitor import DeviceMonitor
 from drive_manager import DriveManager
 from firmware_proxy_client import FirmwareProxyClient
 from firmware_proxy_server import create_proxy_server
@@ -73,6 +74,7 @@ class UiSignals(QObject):
     scan_finished = Signal(object, object)
     upload_finished = Signal(bool)
     key_update_finished = Signal(bool, object)
+    device_log = Signal(str, int, str, str)  # level, code, msg, timestamp
 
 
 class FirmwareUpdaterQtApp:
@@ -89,12 +91,21 @@ class FirmwareUpdaterQtApp:
         self.stop_requested = False
         self.upload_thread: Optional[threading.Thread] = None
 
+        self.device_monitor: Optional[DeviceMonitor] = None
+        self._monitor_dialog: Optional[QDialog] = None
+        self._monitor_log_widget: Optional[QPlainTextEdit] = None
+        self._monitor_status_label: Optional[QLabel] = None
+        self._monitor_connect_btn: Optional[QPushButton] = None
+        self._monitor_was_running: bool = False
+        self._monitor_port: Optional[str] = None
+
         self.signals = UiSignals()
         self.signals.log.connect(self._append_log)
         self.signals.progress.connect(self._on_worker_progress)
         self.signals.scan_finished.connect(self._on_scan_finished)
         self.signals.upload_finished.connect(self._on_upload_finished)
         self.signals.key_update_finished.connect(self._on_key_update_finished)
+        self.signals.device_log.connect(self._on_device_log_message)
 
         self.window = self._load_main_window()
         self._bind_widgets()
@@ -376,6 +387,17 @@ class FirmwareUpdaterQtApp:
         # Wrap long log lines for easier reading.
         self.log_text.setLineWrapMode(QPlainTextEdit.WidgetWidth)
 
+        # Cihaz Logu butonu — status bar'a ekle
+        self._monitor_open_btn = QPushButton("Cihaz Logu")
+        self._monitor_open_btn.setProperty("role", "subtle")
+        self._monitor_open_btn.setFixedWidth(110)
+        sb = self.window.statusBar()
+        sb.setStyleSheet(
+            "QStatusBar { background: #0D1117; color: #8b949e;"
+            " border-top: 1px solid #30363d; padding: 2px 8px; }"
+        )
+        sb.addPermanentWidget(self._monitor_open_btn)
+
     def _connect_ui(self) -> None:
         self.admin_login_button.clicked.connect(self._show_admin_login_dialog)
         self.back_step_button.clicked.connect(self._go_step_back)
@@ -389,6 +411,7 @@ class FirmwareUpdaterQtApp:
         self.start_upload_button.clicked.connect(self._start_or_stop_upload)
         self.new_update_button.clicked.connect(self._reset_for_new_update)
         self.edit_settings_button.clicked.connect(self._jump_to_settings)
+        self._monitor_open_btn.clicked.connect(self._open_device_monitor_dialog)
 
     def _hide_legacy_admin_tab(self) -> None:
         return
@@ -1428,6 +1451,146 @@ class FirmwareUpdaterQtApp:
         self._update_anim_step += 1
         self.update_status_label.setText(f"{self._update_anim_base}{suffix}")
 
+    # ─────────────────────────────────────────────────────────────
+    # Cihaz Logu (Device Monitor)
+    # ─────────────────────────────────────────────────────────────
+
+    def _open_device_monitor_dialog(self) -> None:
+        if self._monitor_dialog is None:
+            self._build_monitor_dialog()
+        self._monitor_dialog.show()
+        self._monitor_dialog.raise_()
+        self._monitor_dialog.activateWindow()
+
+    def _build_monitor_dialog(self) -> None:
+        dlg = QDialog(self.window)
+        dlg.setWindowTitle("Cihaz Logu — Gonderici STM32")
+        dlg.resize(700, 440)
+        dlg.setStyleSheet(self._shared_theme_stylesheet())
+
+        layout = QVBoxLayout(dlg)
+        layout.setSpacing(8)
+        layout.setContentsMargins(12, 12, 12, 12)
+
+        # Üst satır: durum + butonlar
+        top_row = QHBoxLayout()
+        status_label = QLabel("Bagli degil")
+        status_label.setStyleSheet("color: #8b949e; font-size: 9pt;")
+        top_row.addWidget(status_label)
+        top_row.addStretch()
+
+        connect_btn = QPushButton("Baglat")
+        connect_btn.setObjectName("monitorConnectBtn")
+        connect_btn.setFixedWidth(110)
+        clear_btn = QPushButton("Temizle")
+        clear_btn.setFixedWidth(80)
+        top_row.addWidget(connect_btn)
+        top_row.addWidget(clear_btn)
+        layout.addLayout(top_row)
+
+        # Log alanı
+        log_widget = QPlainTextEdit()
+        log_widget.setReadOnly(True)
+        log_widget.setPlaceholderText(
+            "Cihaz logu burada gorunecek...\n\n"
+            "[E:XX]  Hata mesajlari  (kirmizi)\n"
+            "[W:XX]  Uyari mesajlari (sari)\n"
+            "[I:XX]  Bilgi mesajlari (mavi)\n"
+            "Diger   Normal log      (gri)"
+        )
+        log_widget.setLineWrapMode(QPlainTextEdit.WidgetWidth)
+        log_widget.setStyleSheet(
+            "QPlainTextEdit { font-family: 'Consolas', 'Courier New', monospace;"
+            " font-size: 9pt; }"
+        )
+        layout.addWidget(log_widget)
+
+        self._monitor_dialog = dlg
+        self._monitor_log_widget = log_widget
+        self._monitor_status_label = status_label
+        self._monitor_connect_btn = connect_btn
+
+        def _toggle_connect() -> None:
+            port = self.port_combo.currentText()
+            if not port or "bulunamadi" in port.lower():
+                QMessageBox.warning(dlg, "Uyari", "Gecerli bir COM port secin.")
+                return
+            if self.device_monitor and self.device_monitor.is_running:
+                self.device_monitor.stop()
+                connect_btn.setText("Baglat")
+                status_label.setText("Baglanti kesildi.")
+                status_label.setStyleSheet("color: #8b949e; font-size: 9pt;")
+            else:
+                baud = self.config.get("baud_rate", 115200)
+                self.device_monitor = DeviceMonitor(
+                    port=port,
+                    baud=baud,
+                    on_message=lambda level, code, msg, ts: self.signals.device_log.emit(
+                        level, code, msg, ts
+                    ),
+                )
+                self.device_monitor.start()
+                connect_btn.setText("Baglantiyi Kes")
+                status_label.setText(f"Baglaniyor: {port}...")
+                status_label.setStyleSheet("color: #d29922; font-size: 9pt;")
+
+        connect_btn.clicked.connect(_toggle_connect)
+        clear_btn.clicked.connect(log_widget.clear)
+
+        def _on_dialog_close(_result: int) -> None:
+            if self.device_monitor and self.device_monitor.is_running:
+                self.device_monitor.stop()
+
+        dlg.finished.connect(_on_dialog_close)
+
+    def _on_device_log_message(
+        self, level: str, code: int, msg: str, timestamp: str
+    ) -> None:
+        if self._monitor_log_widget is None:
+            return
+
+        # Seviyeye göre renk + etiket
+        if level == "E":
+            color = "#f85149"
+            label = "HATA"
+        elif level == "W":
+            color = "#d29922"
+            label = "UYARI"
+        elif level == "I":
+            color = "#58a6ff"
+            label = "BİLGİ"
+        else:
+            color = "#8b949e"
+            label = "LOG"
+
+        code_str = f" [0x{code:02X}]" if code != 0 else ""
+        safe_msg = msg.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        html = (
+            f'<span style="color:#6e7681;">[{timestamp}]</span> '
+            f'<span style="color:{color};font-weight:bold;">{label}{code_str}</span> '
+            f'<span style="color:#e6edf3;">{safe_msg}</span>'
+        )
+        self._monitor_log_widget.appendHtml(html)
+        self._monitor_log_widget.verticalScrollBar().setValue(
+            self._monitor_log_widget.verticalScrollBar().maximum()
+        )
+
+        # Status label ve connect butonu güncelle
+        if self._monitor_status_label:
+            if level == "E":
+                self._monitor_status_label.setText(f"Son hata: {msg[:55]}")
+                self._monitor_status_label.setStyleSheet("color: #f85149; font-size: 9pt;")
+            elif level == "I" and "baglandi" in msg.lower():
+                self._monitor_status_label.setText("Bagli — mesajlar izleniyor")
+                self._monitor_status_label.setStyleSheet("color: #3fb950; font-size: 9pt;")
+                if self._monitor_connect_btn:
+                    self._monitor_connect_btn.setText("Baglantiyi Kes")
+            elif "durduruldu" in msg.lower() or "kesildi" in msg.lower():
+                self._monitor_status_label.setText("Bagli degil")
+                self._monitor_status_label.setStyleSheet("color: #8b949e; font-size: 9pt;")
+                if self._monitor_connect_btn:
+                    self._monitor_connect_btn.setText("Baglat")
+
     def _append_log(self, message: str) -> None:
         stamp = QDateTime.currentDateTime().toString("HH:mm:ss")
         self.log_text.appendPlainText(f"[{stamp}] {message}")
@@ -2020,6 +2183,14 @@ class FirmwareUpdaterQtApp:
             )
             self.signals.upload_finished.emit(bool(success))
 
+        # Upload sirasinda monitor'u durdur — port paylasim cakismasi onle
+        if self.device_monitor and self.device_monitor.is_running:
+            self._monitor_was_running = True
+            self._monitor_port = self.port_combo.currentText()
+            self.device_monitor.stop()
+        else:
+            self._monitor_was_running = False
+
         self.upload_thread = threading.Thread(target=worker, daemon=True)
         self.upload_thread.start()
 
@@ -2072,6 +2243,19 @@ class FirmwareUpdaterQtApp:
                 "Guncelleme basarisiz. Yeni deneme icin ayarlari kontrol edin.",
             )
         self.pending_firmware_version = None
+
+        # Upload bitti — monitor bagliysa yeniden basla
+        if self._monitor_was_running and self._monitor_port:
+            baud = self.config.get("baud_rate", 115200)
+            self.device_monitor = DeviceMonitor(
+                port=self._monitor_port,
+                baud=baud,
+                on_message=lambda level, code, msg, ts: self.signals.device_log.emit(
+                    level, code, msg, ts
+                ),
+            )
+            self.device_monitor.start()
+            self._monitor_was_running = False
 
     def _show_admin_login_dialog(self) -> None:
         if self.admin_password:

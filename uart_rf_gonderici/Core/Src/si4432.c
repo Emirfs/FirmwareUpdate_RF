@@ -131,12 +131,13 @@ void SI4432_Init(void) {
   SI4432_WriteReg(0x72, 0x48); // Frequency Deviation: +/-45 kHz
 
   /* Paket yapilandirmasi (resmi ornekten) */
-  SI4432_WriteReg(0x34, 0x0A); // Preamble Length: 5 byte (10 nibble)
-  SI4432_WriteReg(0x33, 0x02); // Header Control 2: variable len, sync 3&2
+  SI4432_WriteReg(0x34, 0x10); // Preamble Length: 8 byte (16 nibble) — gurultu direnci icin uzatildi
+  SI4432_WriteReg(0x33, 0x06); // Header Control 2: variable len, sync word 3,2&1 (3 byte)
   SI4432_WriteReg(0x36, 0x2D); // Sync Word 3
   SI4432_WriteReg(0x37, 0xD4); // Sync Word 2
+  SI4432_WriteReg(0x38, 0xAA); // Sync Word 1 — 3. sync byte, false sync olasiligini 256x dusurur
   SI4432_WriteReg(0x32, 0x00); // Header Control 1: header filtresiz
-  SI4432_WriteReg(0x35, 0x28); // Preamble Detection: 20 bit esik
+  SI4432_WriteReg(0x35, 0x30); // Preamble Detection: 24 bit esik (preamble uzamasiyla uyumlu)
   SI4432_WriteReg(0x30, 0x0D); // Data Access Control (TX): CRC-IBM + paket isleme
   SI4432_WriteReg(0x71, 0x63); // Modulation Mode Control 2: FIFO + GFSK
 

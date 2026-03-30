@@ -37,7 +37,7 @@ def _compute_crc8(data: bytes) -> int:
     return crc
 
 
-def _ecdh_rf_handshake(ser, new_master_key: bytes = None, aes_key_fallback: bytes = None):
+def _ecdh_rf_handshake(ser, new_master_key: bytes = None, aes_key_fallback: bytes = None, log=None):
     """
     RF mode ECDH handshake.
 
@@ -48,30 +48,66 @@ def _ecdh_rf_handshake(ser, new_master_key: bytes = None, aes_key_fallback: byte
     new_master_key verilirse KEY_UPDATE paketi de gonderilir.
     Donus: session_key (bytes, 32) veya None (basarisiz/ECDH yok)
     """
-    if not X25519_AVAILABLE:
-        # Eski protokol: sadece 'W' gonder, 1 byte ACK bekle
-        # ECDH yok: 'W' gonder, C sender yine de 33 byte donduruyor
-        # (pub_receiver 32B + ACK 1B). Hepsini oku, son byte ACK olmali.
-        ser.write(b'W')
-        response = ser.read(33)
-        if len(response) < 33 or response[32:33] != b'\x06':
-            return None
-        return aes_key_fallback  # Session key yok — fallback AES key kullan
+    def _l(msg):
+        if log:
+            log(msg)
 
+    if not X25519_AVAILABLE:
+        _l("   [ECDH] cryptography paketi yok — eski protokol (sadece 'W')")
+        ser.write(b'W')
+        _l("   [ECDH] 'W' gönderildi, pub_receiver+ACK bekleniyor (33 byte)...")
+        response = ser.read(33)
+        _l(f"   [ECDH] Gelen: {len(response)} byte" +
+           (f" | ACK: 0x{response[32]:02X}" if len(response) >= 33 else " | EKSIK VERİ"))
+        if len(response) < 33 or response[32:33] != b'\x06':
+            _l(f"   [ECDH] ❌ Beklenen ACK=0x06, gelen: {response[-1:].hex() if response else 'boş'}")
+            return None
+        _l("   [ECDH] ACK alındı — fallback AES key kullanılacak")
+        return aes_key_fallback
+
+    _l("   [ECDH] X25519 ephemeral key pair üretiliyor...")
     private_key = X25519PrivateKey.generate()
     pub_sender = private_key.public_key().public_bytes_raw()  # 32 byte
+    _l(f"   [ECDH] pub_sender: {pub_sender[:8].hex()}... (32 byte)")
 
-    ser.write(b'W' + pub_sender)  # 33 byte
+    _l("   [ECDH] 'W' + pub_sender gönderiliyor (33 byte)...")
+    ser.write(b'W' + pub_sender)
 
+    _l(f"   [ECDH] pub_receiver + ACK bekleniyor (timeout={ser.timeout}s)...")
+    _l("          STM32 gönderici BOOT_REQUEST→BOOT_ACK döngüsü yapıyor (max 30s)...")
     response = ser.read(33)  # pub_receiver(32) + ACK(1)
-    if len(response) < 33 or response[32:33] != b'\x06':
+
+    if len(response) == 0:
+        _l("   [ECDH] ❌ Hiç veri gelmedi! Kontrol listesi:")
+        _l("          • Gönderici STM32 açık mı? LED yanıyor mu?")
+        _l("          • Alıcı güç aldı mı? (sıfırlama gerekebilir)")
+        _l("          • Si4432 RF modülü bağlı mı?")
+        _l("          • COM port doğru mu?")
         return None
+
+    if len(response) < 33:
+        _l(f"   [ECDH] ❌ Eksik veri: {len(response)}/33 byte geldi")
+        _l(f"          Ham: {response.hex()}")
+        _l("          Alıcı bootloader'a geçememiş olabilir (3s pencere kaçırıldı?)")
+        return None
+
+    ack_byte = response[32]
+    if ack_byte != 0x06:
+        _l(f"   [ECDH] ❌ ACK hatası: beklenen 0x06, gelen 0x{ack_byte:02X}")
+        if ack_byte == 0x15:
+            _l("          NACK (0x15) → alıcı bootloader'a geçemedi veya RF timeout")
+        _l(f"          Ham yanıt: {response.hex()}")
+        return None
+
+    _l(f"   [ECDH] pub_receiver alındı: {response[:8].hex()}... (32 byte) | ACK=0x06 ✓")
 
     pub_receiver_key = X25519PublicKey.from_public_bytes(response[:32])
     session_key = private_key.exchange(pub_receiver_key)
+    _l(f"   [ECDH] Session key hesaplandı: {session_key[:8].hex()}...")
 
     # Opsiyonel: yeni master key gonder
     if new_master_key is not None and len(new_master_key) == 32:
+        _l("   [ECDH] KEY_UPDATE gönderiliyor (session key ile şifreli)...")
         zero_iv = b'\x00' * 16
         cipher = AES.new(session_key, AES.MODE_CBC, zero_iv)
         enc_key = cipher.encrypt(new_master_key)
@@ -79,7 +115,9 @@ def _ecdh_rf_handshake(ser, new_master_key: bytes = None, aes_key_fallback: byte
         ser.write(bytes([RF_CMD_KEY_UPDATE]) + enc_key + bytes([crc8]))
         ku_resp = ser.read(1)
         if ku_resp != b'\x06':
-            return None  # KEY_UPDATE basarisiz
+            _l(f"   [ECDH] ❌ KEY_UPDATE reddedildi: {ku_resp.hex() if ku_resp else 'timeout'}")
+            return None
+        _l("   [ECDH] KEY_UPDATE kabul edildi ✓")
 
     return session_key
 
@@ -200,9 +238,9 @@ def update_stm32_key(config, new_key_hex, log=None):
         _log("   ⏳ Alıcının bootloader'a geçmesi bekleniyor (max 30 sn)...")
 
         session_key = _ecdh_rf_handshake(ser, new_master_key=new_key,
-                                          aes_key_fallback=current_key)
+                                          aes_key_fallback=current_key, log=_log)
         if session_key is None:
-            _log("❌ ECDH handshake başarısız! Alıcı kapalı veya RF sorunu.")
+            _log("❌ ECDH handshake başarısız! Yukarıdaki adımlara bakın.")
             return False
 
         _log("✅ Yeni master key alıcı Flash'ına yazıldı (ECDH korumalı)!")
@@ -361,13 +399,17 @@ def upload_firmware(config, log=None, on_progress=None, stop_flag=None, download
 
         if is_rf:
             _log("🔐 ECDH key exchange başlatılıyor (alıcı bootloader'a geçiyor)...")
-            _log("   ⏳ Bu işlem 30 saniyeye kadar sürebilir...")
+            _log("   ⏳ Gönderici BOOT_REQUEST yayınlıyor, alıcının cevap vermesi bekleniyor (max 30s)...")
             new_master_key_hex = config.get("new_master_key_hex", None)
             new_master_key = bytes.fromhex(new_master_key_hex) if new_master_key_hex else None
             session_key = _ecdh_rf_handshake(ser, new_master_key=new_master_key,
-                                              aes_key_fallback=aes_key)
+                                              aes_key_fallback=aes_key, log=_log)
             if session_key is None:
-                _log("❌ ECDH handshake başarısız! Alıcı kapalı veya RF sorunu.")
+                _log("❌ ECDH handshake başarısız!")
+                _log("   Olası nedenler:")
+                _log("   1) Alıcı STM32 3s pencerede BOOT_REQUEST'i göremedi → güç döngüsü yapın")
+                _log("   2) Si4432 RF bağlantısı yok → kablo/SPI kontrolü")
+                _log("   3) BOOT_ACK geldi ama ECDH başarısız → STM32 firmware güncel mi?")
                 return False
             if X25519_AVAILABLE:
                 _log("✅ ECDH tamamlandı — session key türetildi (havada görünmez)")
@@ -392,6 +434,7 @@ def upload_firmware(config, log=None, on_progress=None, stop_flag=None, download
         #    0x00 = KEY_UPDATE yok, doğrudan metadata
         #    (KEY_UPDATE zaten handshake sırasında gönderildi)
         # ═══════════════════════════════════════════════
+        _log(f"📋 Metadata gönderiliyor → boyut={firmware_size}B v{firmware_version} CRC=0x{firmware_crc:08X}")
         ser.timeout = TIMEOUT_METADATA
         ser.write(b'\x00')  # Komut byte: KEY_UPDATE yok
         metadata = (
@@ -403,21 +446,27 @@ def upload_firmware(config, log=None, on_progress=None, stop_flag=None, download
 
         ack = ser.read(1)
         if ack != b'\x06':
-            _log(f"❌ Metadata reddedildi! Gelen: {ack.hex() if ack else 'boş'}")
+            raw = ack.hex() if ack else 'boş/timeout'
+            _log(f"❌ Metadata reddedildi! Gelen: 0x{raw}")
+            _log("   Olası neden: AES key uyuşmazlığı veya metadata RF'e iletilemedi")
             return False
         _log("✅ Metadata kabul edildi!")
 
         # ═══════════════════════════════════════════════
         # 5. FLASH SİLME BEKLENİYOR
         # ═══════════════════════════════════════════════
-        _log(f"⏳ Flash siliniyor (bu ~{TIMEOUT_FLASH//2 if not is_rf else TIMEOUT_FLASH} saniye sürebilir)...")
+        _log(f"⏳ Alıcı Flash silme bildirimi bekleniyor (FLASH_ERASE_DONE, timeout={TIMEOUT_FLASH}s)...")
+        _log("   RF modunda sayfa bazlı silme yapılır — birkaç saniye içinde ACK gelmeli")
         ser.timeout = TIMEOUT_FLASH
 
         ack = ser.read(1)
         if ack != b'\x06':
-            _log(f"❌ Flash silme başarısız! Gelen: {ack.hex() if ack else 'boş'}")
+            raw = ack.hex() if ack else 'boş/timeout'
+            _log(f"❌ Flash silme bildirimi gelmedi! Gelen: 0x{raw}")
+            _log("   FLASH_ERASE_DONE alıcıdan RF üzerinden gelmiyor olabilir")
+            _log("   → Metadata alıcıya ulaştı mı? AES key doğru mu?")
             return False
-        _log("✅ Flash silindi!")
+        _log("✅ Flash silindi — transfer başlıyor!")
 
         if _stopped():
             return False
