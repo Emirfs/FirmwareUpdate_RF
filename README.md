@@ -10,6 +10,8 @@
 >
 > This README follows the active constants implemented in source code. In particular, the authoritative references for flash layout and protocol constants are `alici_cihaz/Core/Inc/rf_bootloader.h` and `uart_rf_gonderici/Core/Inc/rf_protocol.h`.
 
+           (Embedded master agents tested in this repo: https://github.com/Emirfs/WID)
+                  
 ## İçindekiler / Contents
 
 1. [Proje Özeti / Project Summary](#proje-özeti--project-summary)
