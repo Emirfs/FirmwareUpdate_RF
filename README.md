@@ -5,6 +5,7 @@
 > **EN:** This repository contains a complete wireless firmware-update chain that combines a desktop uploader UI, an STM32 sender acting as a UART-to-RF bridge, and an RF bootloader running on the remote target device.
 
 > **Önemli Not / Important Note**
+> 
 > Embedded master agents tested in this repo: https://github.com/Emirfs/WID 
 > 
 > Bu README, aktif kaynak kodda tanımlı sabitleri esas alır. Özellikle flash yerleşimi ve protokol sabitleri için referans noktası `alici_cihaz/Core/Inc/rf_bootloader.h` ve `uart_rf_gonderici/Core/Inc/rf_protocol.h` dosyalarıdır.
