@@ -4,75 +4,153 @@
 #include <stdint.h>
 
 // =========================================================================
-// STM32F030CC Flash Memory Layout
+// STM32F030CC Flash Memory Layout — Dual-Slot OTA
 // =========================================================================
 //
 //  0x08000000 ┌─────────────────────┐
-//             │   BOOTLOADER (32KB) │  Sayfa 0–15 (16 × 2KB)
+//             │  BOOTLOADER CODE    │  Sayfa 0–11   (12 × 2KB = 24KB)
+//  0x08006000 ├─────────────────────┤
+//             │  SHARED RF LIB      │  Sayfa 12–14  ( 3 × 2KB =  6KB)
+//             │  0x08006000: ROM API Table (64B, sabit adres)
+//             │  0x08006040: si4432 + boot_rf kodu
+//  0x08007800 ├─────────────────────┤
+//             │  KEY_STORE          │  Sayfa 15     ( 1 × 2KB =  2KB)
 //  0x08008000 ├─────────────────────┤
-//             │   APPLICATION       │  Sayfa 16–126 (111 × 2KB = 222KB)
+//             │  SLOT A (aktif)     │  Sayfa 16–70  (55 × 2KB = 110KB)
+//             │  App her zaman buradan çalışır                         │
+//  0x08023800 ├─────────────────────┤
+//             │  SLOT B (yedek)     │  Sayfa 71–125 (55 × 2KB = 110KB)
+//             │  Güncelleme öncesi Slot A yedeklenir; rollback kaynağı │
+//  0x0803F000 ├─────────────────────┤
+//             │  SLOT METADATA      │  Sayfa 126    ( 1 × 2KB =  2KB)
+//             │  SlotMeta_t struct (52 byte); state machine + CRC bilgisi
 //  0x0803F800 ├─────────────────────┤
-//             │   BOOT FLAG (2KB)   │  Sayfa 127 (son sayfa)
+//             │  BOOT FLAG          │  Sayfa 127    ( 1 × 2KB =  2KB)
+//             │  set/clear_boot_flag + resume bitmap                   │
 //  0x0803FFFF └─────────────────────┘
 //
 // =========================================================================
 
-// Uygulama başlangıç adresi (bootloader'dan sonra)
-#define APP_ADDRESS 0x08008000
-
-// Uygulama alanı boyutu (222KB = 111 sayfa × 2KB)
-#define APP_AREA_SIZE (222 * 1024)
-
 // STM32F030 sayfa boyutu
-#define FLASH_PAGE_SIZE 2048
+#define FLASH_PAGE_SIZE  2048U
+#define FLASH_PAGE_SHIFT 11U      // 2^11 = 2048
 
-// Bootloader sayfa sayısı
-#define BOOTLOADER_PAGES 16
+// ── Slot A (aktif uygulama) ───────────────────────────────────────────────
+#define SLOT_A_ADDRESS   0x08008000U   // sayfa 16 başı
+#define SLOT_A_PAGES     55U           // sayfa 16–70
+#define SLOT_A_SIZE      (SLOT_A_PAGES * FLASH_PAGE_SIZE) // 112640 = 110KB
 
-// Uygulama sayfa sayısı
-#define APP_PAGES 111
+// ── Slot B (yedek / staging) ──────────────────────────────────────────────
+#define SLOT_B_ADDRESS   0x08023800U   // sayfa 71 başı
+#define SLOT_B_PAGES     55U           // sayfa 71–125
+#define SLOT_B_SIZE      (SLOT_B_PAGES * FLASH_PAGE_SIZE) // 112640 = 110KB
 
-// Boot flag saklama adresi — Flash'ın son sayfası (sayfa 127)
-// Format: [MAGIC:4][FLAG:4] = 8 byte
-#define BOOT_FLAG_ADDRESS 0x0803F800
-#define BOOT_FLAG_PAGE 127
-#define BOOT_FLAG_MAGIC 0xB007B007   // "BOOTBOOT"
-#define BOOT_FLAG_REQUEST 0x00000001 // Güncelleme talep edildi
-#define BOOT_FLAG_NONE 0xFFFFFFFF    // Normal boot (flash silinmiş)
+// ── Slot Metadata (sayfa 126) ─────────────────────────────────────────────
+#define SLOT_META_ADDRESS  0x0803F000U
+#define SLOT_META_PAGE     126U
+#define SLOT_META_MAGIC    0x5107CAFEU
 
-// Firmware versiyonu saklama adresi (boot flag sayfasında, offset +8)
-#define VERSION_ADDRESS (BOOT_FLAG_ADDRESS + 8)
+// ── Geriye dönük uyumluluk takma adları ──────────────────────────────────
+// boot_flow.c APP_ADDRESS / APP_AREA_SIZE / APP_PAGES kullanıyor; bunlar
+// artık Slot A'yı gösteriyor — her zaman yazma hedefi Slot A'dır.
+#define APP_ADDRESS   SLOT_A_ADDRESS
+#define APP_AREA_SIZE SLOT_A_SIZE
+#define APP_PAGES     SLOT_A_PAGES
+
+// Bootloader bölgesi sayfa sayısı (sayfa 0-15, keystore dahil)
+#define BOOTLOADER_PAGES 16U
 
 // =========================================================================
-// Resume (Kaldığı Yerden Devam) Sabitleri
+// Slot State Machine
 // =========================================================================
 //
-// Boot flag sayfasının (0x0803F800) kullanılmayan alanına yazılır:
+// EMPTY    → Metadata sayfası hiç yazılmamış (ilk kurulum)
+// NORMAL   → Slot A geçerli, normal çalışma
+// BACKED_UP→ Slot A, Slot B'ye yedeklendi; güncelleme Slot A'ya yazılıyor
+// TRIAL    → Yeni firmware Slot A'da, uygulama henüz onaylamamış
+// ROLLBACK → Slot B'den Slot A'ya geri yükleme bekliyor (main.c yapar)
+// CONFIRMED→ Uygulama sağlıklı boot onayladı
+//
+// ─── Geçiş diyagramı ────────────────────────────────────────────────────
+//
+//  EMPTY/NORMAL ──(güncelleme başlar)──► BACKED_UP
+//       ↑                                    │
+//       │                                    │ (yedekleme + yazma + CRC OK)
+//       │                                    ▼
+//   ROLLBACK ◄──(trial > max)──────── TRIAL
+//       │                                    │
+//       │                                    │ (app confirm_boot çağırır)
+//       │                                    ▼
+//       └────────────────────────────── CONFIRMED → NORMAL
+//
+// =========================================================================
+
+#define SLOT_STATE_EMPTY      0xFFU  // sayfa silinmiş — veri yok
+#define SLOT_STATE_NORMAL     0x01U  // normal çalışma
+#define SLOT_STATE_BACKED_UP  0x02U  // yedekleme tamam, yazma devam ediyor
+#define SLOT_STATE_TRIAL      0x03U  // yeni fw deneme aşamasında
+#define SLOT_STATE_ROLLBACK   0x04U  // geri yükleme gerekiyor
+#define SLOT_STATE_CONFIRMED  0x05U  // app onayladı
+
+// =========================================================================
+// SlotMeta_t — Sayfa 126 (0x0803F000) formatı
+// =========================================================================
+//
+// Boyut: 52 byte
+// Son alan meta_crc32: önceki tüm alanların CRC-32'si (kendisi hariç)
+// confirm_flag: 0xFFFFFFFF = onay yok, 0x00000000 = app onayladı
+//   (Uygulama bu alanı silmeden 0x00000000 yazabilir: yalnız 1→0 geçişi)
+//
+typedef struct {
+    uint32_t magic;          // SLOT_META_MAGIC = 0x5107CAFE
+    uint8_t  state;          // SLOT_STATE_xxx
+    uint8_t  trial_count;    // Onaysız boot sayısı (her reset +1)
+    uint8_t  max_trials;     // Rollback eşiği (varsayılan 3)
+    uint8_t  reserved;
+    uint32_t slot_a_version; // Slot A firmware versiyonu
+    uint32_t slot_b_version; // Slot B firmware versiyonu (0 = boş)
+    uint32_t slot_a_size;    // Slot A firmware boyutu (byte)
+    uint32_t slot_b_size;    // Slot B firmware boyutu (byte) — kopyada her zaman SLOT_A_SIZE
+    uint32_t slot_a_crc32;   // Slot A firmware CRC-32
+    uint32_t slot_b_crc32;   // Slot B firmware CRC-32 (backup doğrulama için)
+    uint32_t confirm_flag;   // 0xFFFFFFFF=onay yok, 0x00000000=app onayladı
+    uint32_t meta_crc32;     // Bu struct'ın CRC-32'si (meta_crc32 hariç, 48 byte)
+} __attribute__((packed)) SlotMeta_t; // 52 byte
+
+// =========================================================================
+// Boot Flag — Sayfa 127 (0x0803F800)
+// =========================================================================
+
+#define BOOT_FLAG_ADDRESS  0x0803F800U
+#define BOOT_FLAG_PAGE     127U
+#define BOOT_FLAG_MAGIC    0xB007B007U  // "BOOTBOOT"
+#define BOOT_FLAG_REQUEST  0x00000001U  // Güncelleme talep edildi
+#define BOOT_FLAG_NONE     0xFFFFFFFFU  // Normal boot (flash silinmiş)
+
+// =========================================================================
+// Resume (Kaldığı Yerden Devam) — Boot Flag Sayfasında
+// =========================================================================
+//
+// Boot flag sayfası (0x0803F800) düzeni:
 //   +0  [4 byte] : BOOT_FLAG_MAGIC
 //   +4  [4 byte] : BOOT_FLAG_REQUEST
-//   +8  [4 byte] : VERSION
-//   +12 [4 byte] : RESUME_MAGIC  ← resume durumu geçerli mi?
+//   +8  [4 byte] : (rezerve — versiyon artık SlotMeta'da)
+//   +12 [4 byte] : RESUME_MAGIC
 //   +16 [4 byte] : Toplam paket sayısı
-//   +20 [222 byte]: Sayfa bitti bitmap (111 halfword, her biri 0x0000 = tamam)
+//   +20 [110 byte]: Sayfa bitti bitmap (55 halfword × 2 byte)
 //
-// Nasıl çalışır:
-//   - Her sayfa (16 paket = 2KB) tamamlandığında, o sayfanın bitmap girişi
-//     0xFFFF → 0x0000 yazılır (Flash 1→0 yazımı, silmeden yapılabilir).
-//   - Cihaz resetlenince bootloader resume_start_packet'i okur ve
-//     BOOT_ACK payload'ında gönderici'ye bildirir.
-//   - Gönderici başa döndüğünde ilk N paketi RF'e iletmeden geçer (UART'tan
-//     okur, PC'ye ACK verir, RF'e göndermez).
-// =========================================================================
-
+// Her sayfa (16 paket = 2KB) tamamlanınca bitmap girişi 0xFFFF→0x0000 yazılır.
+// Silme gerekmez (STM32F030: 1→0 yazımı serbesttir).
+//
 // Her firmware paketinin boyutu 128 byte; Flash sayfa boyutu 2048 byte
 // → her sayfada 16 firmware paketi bulunur
-#define PACKETS_PER_PAGE (FLASH_PAGE_SIZE / FW_PACKET_SIZE) // 16
+#define PACKETS_PER_PAGE (FLASH_PAGE_SIZE / FW_PACKET_SIZE)  // 16
 
-// Resume durumu kayıt adresleri (boot flag sayfasında)
-#define RESUME_MAGIC            0x12345678        // Resume verisi geçerli
-#define RESUME_STATE_ADDRESS    (BOOT_FLAG_ADDRESS + 12) // Magic (4 byte)
-#define RESUME_TOTAL_OFFSET     (BOOT_FLAG_ADDRESS + 16) // Toplam paket (4 byte)
-#define RESUME_PAGE_MAP_ADDRESS (BOOT_FLAG_ADDRESS + 20) // Bitmap (111 x 2 byte)
+// Resume kayıt adresleri (boot flag sayfasında)
+#define RESUME_MAGIC            0x12345678U
+#define RESUME_STATE_ADDRESS    (BOOT_FLAG_ADDRESS + 12U)  // Magic  (4 byte)
+#define RESUME_TOTAL_OFFSET     (BOOT_FLAG_ADDRESS + 16U)  // Toplam paket (4 byte)
+#define RESUME_PAGE_MAP_ADDRESS (BOOT_FLAG_ADDRESS + 20U)  // Bitmap (55 × 2 byte)
 
 // =========================================================================
 // KEY_STORE — Kalıcı AES Master Key (Bootloader page 15)

@@ -45,7 +45,8 @@ _Min_Stack_Size = 0xc00; /* required amount of stack */
 MEMORY
 {
   RAM    (xrw)    : ORIGIN = 0x20000000,   LENGTH = 32K
-  FLASH    (rx)    : ORIGIN = 0x08000000,   LENGTH = 32K   /* Bootloader only — application starts at 0x08008000 */
+  FLASH    (rx)    : ORIGIN = 0x08000000,   LENGTH = 32K
+  												   /* Bootloader only — application starts at 0x08008000 */
   
 }
 

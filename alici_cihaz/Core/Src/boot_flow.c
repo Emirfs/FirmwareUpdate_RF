@@ -270,9 +270,16 @@ void Bootloader_Main(const uint8_t *pub_sender_hint) {
 		}
 
 		while (!got_metadata) {
-			/* 60s boyunca metadata gelmedi → eski uygulamaya dön */
+			/* 60s boyunca metadata gelmedi → çıkış yap */
 			if (HAL_GetTick() - bootloader_entry_tick > BOOTLOADER_IDLE_TIMEOUT_MS) {
-				clear_boot_flag(); /* Boot flag temizle: bir sonraki reset'te uygulama çalışsın */
+				/* App vector table geçerliyse (Flash silinmemişse) boot flag temizle.
+				 * Kısmen silinmiş Flash varsa boot flag KORUNUR: bir sonraki reset'te
+				 * sistem resume için bootloader'da beklemeye devam eder. */
+				uint32_t app_msp_chk = *(volatile uint32_t*) APP_ADDRESS;
+				if ((app_msp_chk & 0xFFF00000) == 0x20000000) {
+					clear_boot_flag(); /* App sağlam — bayrak temizlenebilir */
+				}
+				/* App geçersizse boot flag bırakılır: resume bitmap korunur */
 				LED_Off();
 				return;
 			}
@@ -394,42 +401,108 @@ void Bootloader_Main(const uint8_t *pub_sender_hint) {
 	}
 
 	/* ===================================================================
-	 * ADIM 3: ANLIK HAZIR BİLDİRİMİ (FLASH_ERASE_DONE)
+	 * ADIM 3: SLOT A → SLOT B YEDEKLEME (anti-brick güvencesi)
 	 *
-	 * Onceki tasarimda burada tum Flash siliniyordu (~555ms).
-	 * Artik silme islemini sayfa sayfa yapiyoruz: her 128-byte yazmadan
-	 * once, o adres sayfa basindaysa (current_addr % FLASH_PAGE_SIZE == 0)
-	 * sadece o sayfayi siliyoruz. Bu yaklasimla:
-	 *   - Gonderici cok daha erken veri gondermesine basliyor.
-	 *   - Kalan sayfalar dokunulmadan kaliyor (resume icin guvenli).
-	 *   - Enerji kesintisinde sadece son yarim sayfa etkileniyor.
+	 * Slot A'da geçerli bir uygulama varsa, yeni firmware yazılmadan
+	 * önce mevcut içerik Slot B'ye kopyalanır (~7-8 saniye).
+	 * Bu sayede:
+	 *   - Güncelleme sırasında güç kesintisi → Slot A bozulur, ama
+	 *     Slot B'deki yedekten geri yükleme (rollback) yapılabilir.
+	 *   - Yeni firmware CRC hatası → anında rollback.
+	 *   - Yeni firmware 3 boot onaylamazsa → trial timeout → rollback.
 	 *
-	 * FLASH_ERASE_DONE artik "gondermeye hazir" anlamina geliyor.
-	 * =================================================================== */
-	NeoPixel_SetAll(0, 100, 255); // Acik mavi: hazirlaniliyor
-	NeoPixel_Show();
-
-	/* ===================================================================
-	 * ADIM 4: FLASH_ERASE_DONE GONDER → ACK BEKLE
-	 * Gonderici bu ACK'i alinca paket gondermeye baslar.
+	 * SlotMeta.state = BACKED_UP: yedekleme tamam, Slot A yazılıyor.
+	 * Güç kesintisi durumunda bu state korunur; main.c ilk açılışta
+	 * Slot A MSP geçersizse state'i ROLLBACK'e çevirir.
+	 *
+	 * Resume aktifse (kaldığı yerden devam): yedekleme zaten yapılmış,
+	 * SlotMeta.state == BACKED_UP → yeniden yedeklemeye gerek yok.
 	 * =================================================================== */
 	{
-		uint8_t sent = 0;
-		for (uint8_t retry = 0; retry < 10 && !sent; retry++) {
+		SlotMeta_t meta;
+		uint8_t meta_valid = SlotMeta_Read(&meta);
+
+		uint8_t need_backup = 1U;
+		if (meta_valid && meta.state == SLOT_STATE_BACKED_UP) {
+			/* Resume senaryosu: yedekleme zaten tamamlandı */
+			need_backup = 0U;
+		}
+
+		if (need_backup) {
+			uint32_t app_msp_val = *(volatile uint32_t *) SLOT_A_ADDRESS;
+			uint8_t slot_a_valid = ((app_msp_val & 0xFFF00000U) == 0x20000000U);
+
+			if (slot_a_valid) {
+				/* Yedekleme öncesi state'i kaydet — güç kesilirse korunur */
+				SlotMeta_t backup_meta;
+				if (!meta_valid) {
+					/* İlk yedekleme: sıfırdan oluştur */
+					backup_meta.state          = SLOT_STATE_BACKED_UP;
+					backup_meta.trial_count    = 0U;
+					backup_meta.max_trials     = 3U;
+					backup_meta.reserved       = 0U;
+					backup_meta.slot_a_version = 0U; /* güncelleme sonrası dolar */
+					backup_meta.slot_b_version = 0U;
+					backup_meta.slot_a_size    = 0U;
+					backup_meta.slot_b_size    = 0U;
+					backup_meta.slot_a_crc32   = 0U;
+					backup_meta.slot_b_crc32   = 0U;
+					backup_meta.confirm_flag   = 0xFFFFFFFFU;
+				} else {
+					backup_meta       = meta;
+					backup_meta.state = SLOT_STATE_BACKED_UP;
+				}
+				SlotMeta_Write(&backup_meta);
+
+				NeoPixel_SetAll(255, 80, 0); /* Turuncu: yedekleniyor */
+				NeoPixel_Show();
+
+				/* Slot A → Slot B kopyala (~7-8 saniye, IWDG beslenir) */
+				if (!SlotA_BackupToB()) {
+					/* Yedekleme başarısız — güvenli devam edemeyiz */
+					RF_SendPacket(RF_CMD_UPDATE_FAILED, rf_seq_counter++,
+							(uint8_t[]) { RF_ERR_FLASH_WRITE }, 1);
+					LED_Error();
+					return;
+				}
+
+				/* Yedek CRC'yi kaydet */
+				SlotMeta_t after_backup;
+				SlotMeta_Read(&after_backup);
+				after_backup.slot_b_size  = SLOT_A_SIZE;
+				after_backup.slot_b_crc32 = Calculate_Flash_CRC32(SLOT_B_ADDRESS,
+						SLOT_A_SIZE);
+				SlotMeta_Write(&after_backup);
+			}
+			/* Slot A geçersizse (ilk programlama): yedek alınmaz, Slot B boş kalır */
+		}
+	}
+
+	/* ===================================================================
+	 * ADIM 4: HAZIR BİLDİRİMİ (FLASH_ERASE_DONE) GONDER → ACK BEKLE
+	 *
+	 * Yedekleme tamamlandı; gönderici artık veri gönderebilir.
+	 * Her sayfa, gelen chunk'lar işlenirken sırayla silinir ve yazılır.
+	 * =================================================================== */
+	NeoPixel_SetAll(0, 100, 255); // Açık mavi: hazır
+	NeoPixel_Show();
+
+	{
+		uint8_t sent = 0U;
+		for (uint8_t retry = 0U; retry < 10U && !sent; retry++) {
 			RF_SendPacket(RF_CMD_FLASH_ERASE_DONE, rf_seq_counter, NULL, 0);
 
 			uint8_t rx_type, rx_pld[RF_MAX_PAYLOAD];
 			uint16_t rx_seq;
 			uint8_t rx_pld_len;
-			if (RF_WaitForPacket(&rx_type, &rx_seq, rx_pld, &rx_pld_len,
-					2000)) {
+			if (RF_WaitForPacket(&rx_type, &rx_seq, rx_pld, &rx_pld_len, 2000)) {
 				if (rx_type == RF_CMD_ACK) {
-					sent = 1; // Gonderici hazir mesajini onayladi
+					sent = 1U;
 				}
 			}
 			HAL_IWDG_Refresh(&hiwdg);
 		}
-		rf_seq_counter++; // Sequence numarasini artir
+		rf_seq_counter++;
 	}
 
 	/* ===================================================================
@@ -625,9 +698,9 @@ void Bootloader_Main(const uint8_t *pub_sender_hint) {
 			metadata.firmware_size);
 
 	if (flash_crc != metadata.firmware_crc32) {
-		/* CRC uyusmazligi — Flash'a yanlis veri yazılmis veya bozulmus */
+		/* ── CRC UYUŞMAZLIĞI: Slot B'den eski firmware geri yükle ── */
 		for (int i = 0; i < 5; i++) {
-			NeoPixel_SetAll(255, 0, 128); // Pembe: CRC hatası
+			NeoPixel_SetAll(255, 0, 128); /* Pembe: CRC hatası */
 			NeoPixel_Show();
 			HAL_Delay(150);
 			NeoPixel_Clear();
@@ -636,58 +709,80 @@ void Bootloader_Main(const uint8_t *pub_sender_hint) {
 			HAL_IWDG_Refresh(&hiwdg);
 		}
 
-		/* Gondericiye hatayi bildir — 10 kez dene, ACK gelince dur */
-		for (uint8_t i = 0; i < 10; i++) {
-			RF_SendPacket(RF_CMD_UPDATE_FAILED, rf_seq_counter, (uint8_t[] ) {
-							RF_ERR_FW_CRC_MISMATCH }, 1);
-
+		/* Gondericiye hata bildir */
+		for (uint8_t i = 0U; i < 10U; i++) {
+			RF_SendPacket(RF_CMD_UPDATE_FAILED, rf_seq_counter,
+					(uint8_t[]) { RF_ERR_FW_CRC_MISMATCH }, 1);
 			uint8_t rx_type, rx_pld[RF_MAX_PAYLOAD];
 			uint16_t rx_seq;
 			uint8_t rx_pld_len;
-			if (RF_WaitForPacket(&rx_type, &rx_seq, rx_pld, &rx_pld_len,
-					3000)) {
-				if (rx_type == RF_CMD_ACK) {
-					break; // Gonderici mesaji aldi
-				}
+			if (RF_WaitForPacket(&rx_type, &rx_seq, rx_pld, &rx_pld_len, 3000)) {
+				if (rx_type == RF_CMD_ACK) { break; }
 			}
 			HAL_IWDG_Refresh(&hiwdg);
 		}
 		rf_seq_counter++;
+
+		/* Slot B'de geçerli yedek var mı? → ROLLBACK state yaz, reset */
+		SlotMeta_t rb_meta;
+		if (SlotMeta_Read(&rb_meta) && rb_meta.slot_b_crc32 != 0U) {
+			rb_meta.state = SLOT_STATE_ROLLBACK;
+			SlotMeta_Write(&rb_meta);
+			/* main.c restart'ta Slot B → Slot A kopyalar */
+		}
+
 		LED_Error();
-		return; // Guncelleme basarisiz — bootloader'da kal
+		secure_zero(AES_KEY, sizeof(AES_KEY));
+		return;
 	}
 
 	/* ===================================================================
-	 * ADIM 8: BASARILI TAMAMLAMA
-	 * - Boot flag'ini temizle (bir sonraki reset'te uygulamaya gecilecek)
-	 * - Firmware versiyonunu Flash'a kaydet
-	 * - UPDATE_COMPLETE gonder, uygulamaya atla
+	 * ADIM 8: BAŞARILI TAMAMLAMA
+	 *
+	 * - SlotMeta güncelle: state=TRIAL, Slot A bilgileri, trial_count=0
+	 * - Boot flag temizle (bir sonraki reset'te uygulama çalışacak)
+	 * - UPDATE_COMPLETE gönder
+	 * - Uygulamaya atla (trial boot başlar; app confirm_boot çağırmalı)
 	 * =================================================================== */
-	clear_boot_flag(); // Boot flag sayfasini sil — bir sonraki boot'ta app calisir
+	{
+		SlotMeta_t ok_meta;
+		if (!SlotMeta_Read(&ok_meta)) {
+			/* Metadata okunamazsa sıfırdan oluştur */
+			ok_meta.max_trials     = 3U;
+			ok_meta.reserved       = 0U;
+			ok_meta.confirm_flag   = 0xFFFFFFFFU;
+			ok_meta.slot_b_version = 0U;
+			ok_meta.slot_b_size    = SLOT_A_SIZE;
+			ok_meta.slot_b_crc32   = 0U;
+		}
+		ok_meta.state          = SLOT_STATE_TRIAL;
+		ok_meta.trial_count    = 0U;
+		ok_meta.slot_a_version = metadata.firmware_version;
+		ok_meta.slot_a_size    = metadata.firmware_size;
+		ok_meta.slot_a_crc32   = flash_crc;
+		ok_meta.confirm_flag   = 0xFFFFFFFFU; /* app onaylayana kadar bekler */
+		SlotMeta_Write(&ok_meta);
+	}
 
-	Flash_Write_Version(metadata.firmware_version); // Versiyonu Flash'a kaydet
+	/* Boot flag temizle: bir sonraki reset'te main.c uygulamaya atlar */
+	clear_boot_flag();
 
 	/* UPDATE_COMPLETE gonder — 10 kez dene, ACK gelince dur */
-	for (uint8_t i = 0; i < 10; i++) {
+	for (uint8_t i = 0U; i < 10U; i++) {
 		RF_SendPacket(RF_CMD_UPDATE_COMPLETE, rf_seq_counter, NULL, 0);
-
 		uint8_t rx_type, rx_pld[RF_MAX_PAYLOAD];
 		uint16_t rx_seq;
 		uint8_t rx_pld_len;
 		if (RF_WaitForPacket(&rx_type, &rx_seq, rx_pld, &rx_pld_len, 3000)) {
-			if (rx_type == RF_CMD_ACK) {
-				break; // Gonderici tamamlama mesajini aldi
-			}
+			if (rx_type == RF_CMD_ACK) { break; }
 		}
 		HAL_IWDG_Refresh(&hiwdg);
 	}
 	rf_seq_counter++;
 
-	LED_Success(); // Yesil yanip sonsun — basarili guncelleme
+	LED_Success();
 	HAL_Delay(1000);
 
-	/* Session key'i RAM'den temizle — uygulama bu veriye erisemesin */
 	secure_zero(AES_KEY, sizeof(AES_KEY));
-
-	jump_to_application(); // Yeni firmware'i calistir
+	jump_to_application(); /* Trial boot başlıyor */
 }

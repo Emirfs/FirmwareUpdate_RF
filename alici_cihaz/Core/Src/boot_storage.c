@@ -34,6 +34,7 @@
 #include "iwdg.h"
 #include "main.h"
 #include "rf_bootloader.h"
+#include <stddef.h>
 #include <string.h>
 
 /*
@@ -162,67 +163,168 @@ void clear_boot_flag(void) {
   HAL_FLASH_Lock();
 }
 
-/*
- * Flash_Erase_Application — Uygulama Flash alanini sil (tüm alan)
- *
- * APP_PAGES (111) sayfayi tek tek siler.
- * Her sayfa silme sonrasi watchdog sifirlanir.
- * Toplam: 111 x ~5ms = ~555ms minimum (donanim hizina gore degisir).
- *
- * UYARI: Bu fonksiyon dondugunde uygulama kod alani bos olur!
- *        Kesinlikle yeni firmware yazilmadan calistirilmamali.
- *
- * NOT: Paket paket silme moduyla kullanildiginda bu fonksiyon cagrilmaz;
- *      bunun yerine Flash_Erase_Page her sayfa basinda cagrilir.
- */
-void Flash_Erase_Application(void) {
+/* ── İç yardımcı: sayfa silme (sınır kontrolü yok, yalnız iç kullanım) ─── */
+static void flash_erase_page_raw(uint32_t page_addr)
+{
   HAL_FLASH_Unlock();
-
-  for (uint32_t i = 0; i < APP_PAGES; i++) {
-    FLASH_EraseInitTypeDef single_erase;
-    single_erase.TypeErase   = FLASH_TYPEERASE_PAGES;
-    single_erase.PageAddress = APP_ADDRESS + (i * FLASH_PAGE_SIZE); // Her sayfa 2KB ilerler
-    single_erase.NbPages     = 1;
-
-    uint32_t error;
-    HAL_FLASHEx_Erase(&single_erase, &error);
-    HAL_IWDG_Refresh(&hiwdg); // Her sayfada watchdog sifirla
-  }
-
+  FLASH_EraseInitTypeDef erase;
+  erase.TypeErase   = FLASH_TYPEERASE_PAGES;
+  erase.PageAddress = page_addr;
+  erase.NbPages     = 1U;
+  uint32_t error;
+  HAL_FLASHEx_Erase(&erase, &error);
+  HAL_IWDG_Refresh(&hiwdg);
   HAL_FLASH_Lock();
 }
 
 /*
- * Flash_Erase_Page — Tek bir Flash sayfasini sil
+ * Flash_Erase_Page — Slot A veya Slot B içindeki tek sayfayı sil
  *
- * Paket paket silme modunda, her yeni sayfanin basina gelindiginde
- * (current_addr % FLASH_PAGE_SIZE == 0 oldugunda) bu fonksiyon cagrilir.
- * Yalnizca o sayfayi siler; diger sayfalara dokunmaz.
- *
- * page_addr: silinecek sayfanin baslangic adresi (2KB hizali olmali)
- *
- * Kullanim yeri: boot_flow.c — Data chunk yazma dongusu
+ * Geçerli aralık: sayfa 16–125 (Slot A: 16-70, Slot B: 71-125).
+ * Sayfa 126 (SlotMeta) ve 127 (Boot Flag) bu fonksiyonla silinemez;
+ * bunlar kendi yönetim fonksiyonları tarafından korunur.
  */
-void Flash_Erase_Page(uint32_t page_addr) {
-  /* Güvenlik: yalnızca uygulama alanı (sayfa 16-126) silinebilir */
-  if (page_addr < APP_ADDRESS
-      || page_addr >= (APP_ADDRESS + APP_AREA_SIZE)
-      || (page_addr % FLASH_PAGE_SIZE) != 0) {
-    return; /* Güvensiz adres — işlemi reddet */
+void Flash_Erase_Page(uint32_t page_addr)
+{
+  /* Hizalama kontrolü */
+  if ((page_addr % FLASH_PAGE_SIZE) != 0U) { return; }
+
+  /* Geçerli slot aralığı: Slot A (0x08008000) veya Slot B (0x08023800),
+   * toplam: 0x08008000 – 0x0803EFFF (sayfa 16–125) */
+  if (page_addr < SLOT_A_ADDRESS
+      || page_addr >= (SLOT_B_ADDRESS + SLOT_B_SIZE)) {
+    return; /* Bootloader, SlotMeta veya BootFlag alanı — reddet */
   }
 
+  flash_erase_page_raw(page_addr);
+}
+
+/* =========================================================================
+ * SlotMeta Fonksiyonları — Sayfa 126 (0x0803F000)
+ * =========================================================================
+ *
+ * SlotMeta_Read  : SlotMeta_t oku, magic + meta_crc32 doğrula.
+ *                  Dönüş: 1=geçerli, 0=geçersiz/boş
+ *
+ * SlotMeta_Write : meta_crc32 hesapla, sayfayı sil, struct yaz.
+ *                  Yalnız bootloader tarafından çağrılır.
+ *
+ * SlotMeta_ConfirmBoot : confirm_flag alanını 0x00000000 yap.
+ *                        Sayfa silinmez — uygulama güvenle çağırabilir.
+ * ========================================================================= */
+
+uint8_t SlotMeta_Read(SlotMeta_t *out)
+{
+  const SlotMeta_t *flash = (const SlotMeta_t *)SLOT_META_ADDRESS;
+
+  /* Magic kontrolü */
+  if (flash->magic != SLOT_META_MAGIC) { return 0U; }
+
+  /* Struct kopyala */
+  *out = *flash;
+
+  /* meta_crc32: struct'ın ilk (sizeof - 4) byte'ının CRC'si */
+  uint32_t expected = Calculate_CRC32((const uint8_t *)flash,
+                                      sizeof(SlotMeta_t) - sizeof(uint32_t));
+  if (out->meta_crc32 != expected) { return 0U; }
+
+  return 1U;
+}
+
+void SlotMeta_Write(const SlotMeta_t *meta)
+{
+  SlotMeta_t copy = *meta;
+  copy.magic = SLOT_META_MAGIC;
+
+  /* meta_crc32 hesapla (son alan hariç tüm struct) */
+  copy.meta_crc32 = Calculate_CRC32((const uint8_t *)&copy,
+                                    sizeof(SlotMeta_t) - sizeof(uint32_t));
+
+  /* Sayfa 126'yı sil */
+  flash_erase_page_raw(SLOT_META_ADDRESS);
+
+  /* Struct'ı halfword adımlarla yaz */
+  Flash_Write_Data(SLOT_META_ADDRESS, (const uint8_t *)&copy, sizeof(SlotMeta_t));
+}
+
+void SlotMeta_ConfirmBoot(void)
+{
+  /* confirm_flag alanının Flash adresi */
+  uint32_t addr = SLOT_META_ADDRESS
+                  + (uint32_t)offsetof(SlotMeta_t, confirm_flag);
+
+  /* 0xFFFFFFFF → 0x00000000 (yalnız 1→0 bit geçişi — silme gerekmez) */
+  HAL_FLASH_Unlock();
+  HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, addr,      0x0000U);
+  HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, addr + 2U, 0x0000U);
+  HAL_FLASH_Lock();
+}
+
+/* =========================================================================
+ * Slot Kopyalama — 55 sayfa × 2KB = 110KB
+ * =========================================================================
+ *
+ * Slot_Copy(src_base, dst_base):
+ *   Her sayfada: dst sil → src'den 1024 halfword oku ve yaz → IWDG besle.
+ *   Toplam süre: ~7-8 saniye (55 × (5ms erase + ~128ms write)).
+ *   IWDG her sayfada beslenir.
+ *
+ * Dönüş: 1=başarılı, 0=Flash hatası
+ * ========================================================================= */
+
+static uint8_t Slot_Copy(uint32_t src_base, uint32_t dst_base)
+{
   HAL_FLASH_Unlock();
 
-  FLASH_EraseInitTypeDef erase;
-  erase.TypeErase   = FLASH_TYPEERASE_PAGES;
-  erase.PageAddress = page_addr;
-  erase.NbPages     = 1;
+  for (uint32_t p = 0U; p < SLOT_A_PAGES; p++) {
+    uint32_t src = src_base + p * FLASH_PAGE_SIZE;
+    uint32_t dst = dst_base + p * FLASH_PAGE_SIZE;
 
-  uint32_t error;
-  HAL_FLASHEx_Erase(&erase, &error);
-  HAL_IWDG_Refresh(&hiwdg); // Sayfa silme sirasinda watchdog sifirla
+    /* Hedef sayfayı sil */
+    FLASH_EraseInitTypeDef erase;
+    erase.TypeErase   = FLASH_TYPEERASE_PAGES;
+    erase.PageAddress = dst;
+    erase.NbPages     = 1U;
+    uint32_t err;
+    if (HAL_FLASHEx_Erase(&erase, &err) != HAL_OK) {
+      HAL_FLASH_Lock();
+      return 0U;
+    }
+
+    /* 2048 byte → 1024 halfword kopyala */
+    for (uint32_t i = 0U; i < FLASH_PAGE_SIZE; i += 2U) {
+      uint16_t hw = *(volatile const uint16_t *)(src + i);
+      if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, dst + i, hw) != HAL_OK) {
+        HAL_FLASH_Lock();
+        return 0U;
+      }
+    }
+
+    HAL_IWDG_Refresh(&hiwdg); /* Her sayfa sonrası IWDG besle */
+  }
 
   HAL_FLASH_Lock();
+  return 1U;
+}
+
+/*
+ * SlotA_BackupToB — Slot A içeriğini Slot B'ye kopyala
+ * Güncelleme başlamadan çağrılır; rollback için yedek oluşturur.
+ * Dönüş: 1=başarılı, 0=hata
+ */
+uint8_t SlotA_BackupToB(void)
+{
+  return Slot_Copy(SLOT_A_ADDRESS, SLOT_B_ADDRESS);
+}
+
+/*
+ * SlotA_RestoreFromB — Slot B içeriğini Slot A'ya kopyala (rollback)
+ * main.c state==ROLLBACK tespit edince çağırır.
+ * Dönüş: 1=başarılı, 0=hata
+ */
+uint8_t SlotA_RestoreFromB(void)
+{
+  return Slot_Copy(SLOT_B_ADDRESS, SLOT_A_ADDRESS);
 }
 
 /*
@@ -357,31 +459,9 @@ uint8_t Flash_Verify_Data(uint32_t addr, const uint8_t *data, uint32_t len) {
   return 1; // Tum byte'lar eslesdi — basarili
 }
 
-/*
- * Flash_Read_Version — Boot flag sayfasindaki versiyon numarasini oku
- *
- * VERSION_ADDRESS = BOOT_FLAG_ADDRESS + 8 (MAGIC + FLAG'tan sonra)
- */
-uint32_t Flash_Read_Version(void) {
-  return *(volatile uint32_t *)VERSION_ADDRESS;
-}
-
-/*
- * Flash_Write_Version — Versiyon numarasini Flash'a kaydet
- *
- * Boot flag sayfasindaki VERSION_ADDRESS konumuna yazar.
- * Sayfa silinmemis olmali — clear_boot_flag() cagrilirsa versiyon silinir!
- * Bu yuzden Bootloader_Main'de clear_boot_flag ONCA cagrilir, SONRA versiyon yazilir.
- */
-void Flash_Write_Version(uint32_t version) {
-  HAL_FLASH_Unlock();
-  /* 32-bit degeri iki halfword yazmasi ile kaydet */
-  HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, VERSION_ADDRESS,
-                    (uint16_t)(version & 0xFFFF));
-  HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, VERSION_ADDRESS + 2,
-                    (uint16_t)((version >> 16) & 0xFFFF));
-  HAL_FLASH_Lock();
-}
+/* Flash_Read_Version / Flash_Write_Version kaldırıldı.
+ * Firmware versiyonu artık SlotMeta_t.slot_a_version alanında saklanır.
+ * (boot_flow.c: SlotMeta_Write çağrısında versiyon kaydedilir) */
 
 /* =========================================================================
  * KEY_STORE Fonksiyonlari — Kalici AES Master Key (Page 15, 0x08007800)

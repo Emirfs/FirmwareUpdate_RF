@@ -84,80 +84,126 @@ int main(void) {
 	NeoPixel_Show();
 
 	/* ===================================================================
-	 * BOOT KARARI
+	 * BOOT KARARI — Dual-Slot OTA
 	 *
-	 * Oncelik sirasi:
-	 *   1. Boot flag varsa → dogrudan bootloader (uzaktan tetikleme)
-	 *   2. Gecerli uygulama varsa → 3 sn RF dinle
-	 *      - BOOT_REQUEST gelirse → bootloader
-	 *      - Gelmezse → uygulamaya atla
-	 *   3. Gecerli uygulama yoksa → bootloader (ilk programlama)
+	 * Öncelik sırası:
+	 *   0. SlotMeta oku → ROLLBACK veya trial timeout tespit et
+	 *   1. ROLLBACK state → Slot B → Slot A geri yükle → uygulamaya atla
+	 *   2. Boot flag varsa → doğrudan Bootloader_Main (RF güncelleme)
+	 *   3. Geçerli uygulama (Slot A MSP OK):
+	 *      a. TRIAL veya BACKED_UP state → trial_count++
+	 *         trial_count >= max_trials → ROLLBACK state → reset
+	 *      b. 3 sn RF dinle → BOOT_REQUEST gelirse → Bootloader_Main
+	 *      c. Gelmezse → uygulamaya atla
+	 *   4. Geçerli uygulama yok:
+	 *      - BACKED_UP state + Slot A geçersiz → ROLLBACK state → reset
+	 *      - Yoksa → Bootloader_Main (ilk programlama)
 	 * =================================================================== */
 
-	/* 1. Boot flag kontrolu */
-	if (check_boot_flag()) {
-		/* BOOT_FLAG_ADDRESS'de MAGIC + REQUEST var → bootloader moduna gec */
-		Bootloader_Main(NULL); // RF uzerinden firmware guncelle (pub_sender hint yok)
-		NVIC_SystemReset();    // Bittikten sonra sistemi yeniden basla
+	/* ── ADIM 0: SlotMeta oku ────────────────────────────────────────── */
+	SlotMeta_t s_meta;
+	uint8_t    s_meta_valid = SlotMeta_Read(&s_meta);
+
+	/* ── ADIM 1: ROLLBACK state → Slot B'den geri yükle ─────────────── */
+	if (s_meta_valid && s_meta.state == SLOT_STATE_ROLLBACK) {
+		NeoPixel_SetAll(255, 40, 0); /* Kırmızı-turuncu: rollback */
+		NeoPixel_Show();
+
+		if (SlotA_RestoreFromB()) {
+			/* Geri yükleme başarılı — state güncelle */
+			s_meta.state       = SLOT_STATE_NORMAL;
+			s_meta.trial_count = 0U;
+			s_meta.confirm_flag = 0xFFFFFFFFU;
+			SlotMeta_Write(&s_meta);
+		}
+		/* Başarısız olsa bile devam: Slot A ne ise oradan boot dene */
 	}
 
-	/* 2. Gecerli uygulama var mi? (MSP'nin 0x2000xxxx olmasi gerekiyor) */
+	/* ── ADIM 2: Boot flag → doğrudan bootloader ────────────────────── */
+	if (check_boot_flag()) {
+		Bootloader_Main(NULL);
+		NVIC_SystemReset();
+	}
+
+	/* ── ADIM 3: Slot A geçerlilik kontrolü ─────────────────────────── */
 	uint32_t app_msp = *(volatile uint32_t*) APP_ADDRESS;
-	if ((app_msp & 0xFFF00000) == 0x20000000) {
-		/* Gecerli uygulama var — ama once 3 saniye RF dinle */
-		/* Bu sayede gonderici uzaktan bootloader'i tetikleyebilir */
+	if ((app_msp & 0xFFF00000U) == 0x20000000U) {
 
-		/* EXTI4_15 (Si4432 nIRQ) bootloader polling ile catisiyor — devre disi birak */
+		/* ── Trial boot sayacı ──────────────────────────────────────── */
+		if (s_meta_valid
+				&& (s_meta.state == SLOT_STATE_TRIAL
+						|| s_meta.state == SLOT_STATE_BACKED_UP)) {
+
+			/* confirm_flag = 0 ise app zaten onaylamış → state'i ilerlet */
+			if (s_meta.confirm_flag == 0x00000000U) {
+				s_meta.state       = SLOT_STATE_CONFIRMED;
+				s_meta.trial_count = 0U;
+				SlotMeta_Write(&s_meta);
+			} else {
+				s_meta.trial_count++;
+				if (s_meta.trial_count >= s_meta.max_trials) {
+					/* Trial timeout: Slot B'de yedek var mı? */
+					if (s_meta.slot_b_crc32 != 0U) {
+						s_meta.state = SLOT_STATE_ROLLBACK;
+						SlotMeta_Write(&s_meta);
+						NVIC_SystemReset(); /* Rollback için yeniden başla */
+					} else {
+						/* Yedek yok — kurtarma yapılamaz, bootloader moduna gir */
+						s_meta.trial_count = 0U;
+						SlotMeta_Write(&s_meta);
+						Bootloader_Main(NULL);
+						NVIC_SystemReset();
+					}
+				}
+				SlotMeta_Write(&s_meta); /* Artan sayacı kaydet */
+			}
+		}
+
+		/* ── 3s RF penceresi: BOOT_REQUEST gelirse bootloader'a geç ── */
 		HAL_NVIC_DisableIRQ(EXTI4_15_IRQn);
-
 		SI4432_Init();
 		HAL_Delay(10);
 
-		uint8_t dev_check = SI4432_ReadReg(0x00); // Device Type reg = 0x08 olmali
-		if (dev_check == 0x08) {
-			NeoPixel_SetAll(0, 0, 100); // Mavi — RF dinliyor
+		if (SI4432_ReadReg(0x00U) == 0x08U) {
+			NeoPixel_SetAll(0, 0, 100); /* Mavi: RF dinliyor */
 			NeoPixel_Show();
 
 			uint8_t rx_type, rx_pld[RF_MAX_PAYLOAD];
 			uint16_t rx_seq;
 			uint8_t rx_pld_len;
 
-			/* 3 saniye BOOT_REQUEST bekle */
-			if (RF_WaitForPacket(&rx_type, &rx_seq, rx_pld, &rx_pld_len,
-					3000)) {
+			if (RF_WaitForPacket(&rx_type, &rx_seq, rx_pld, &rx_pld_len, 3000)) {
 				if (rx_type == RF_CMD_BOOT_REQUEST) {
-					/* Gonderici bootloader istiyor → bootloader moduna gec */
-					NeoPixel_SetAll(255, 128, 0); // Turuncu — bootloader'a geciliyor
+					NeoPixel_SetAll(255, 128, 0); /* Turuncu: bootloader'a geçiş */
 					NeoPixel_Show();
-
-					/* Boot flag SET: Bootloader_Main basarisiz olursa reset sonrasi
-					 * dogrudan buraya girer (3s pencere beklemez, hizli yeniden deneme). */
 					set_boot_flag();
-
-					/* pub_sender (32 byte) BOOT_REQUEST payload'inda; ECDH icin hint.
-					 * Sender BOOT_ACK aldiktan sonra BOOT_REQUEST gondermez — hint
-					 * olmadan Bootloader_Main ECDH'yi hicbir zaman tamamlayamaz. */
-					const uint8_t *pub_hint = (rx_pld_len >= ECDH_KEY_SIZE) ? rx_pld : NULL;
+					const uint8_t *pub_hint =
+							(rx_pld_len >= ECDH_KEY_SIZE) ? rx_pld : NULL;
 					Bootloader_Main(pub_hint);
 					NVIC_SystemReset();
 				}
 			}
-			/* Baska tip paket geldi veya timeout → uygulamaya gec */
 		}
 
-		/* BOOT_REQUEST gelmedi veya Si4432 yok → uygulamaya atla */
+		/* BOOT_REQUEST gelmedi → uygulamaya atla */
 		LED_Off();
-		jump_to_application(); // boot_flow.c — MSP + SYSCFG remap + atla
+		jump_to_application();
 	}
 
-	/* 3. Gecerli uygulama yok → bootloader'da kal (ilk programlama) */
-	Bootloader_Main(NULL); // pub_sender yok; loop icinde BOOT_REQUEST beklenir
+	/* ── ADIM 4: Slot A geçersiz ─────────────────────────────────────── */
+	if (s_meta_valid && s_meta.state == SLOT_STATE_BACKED_UP
+			&& s_meta.slot_b_crc32 != 0U) {
+		/* Yedekleme sırasında güç kesilmiş, Slot A bozulmuş → rollback */
+		s_meta.state = SLOT_STATE_ROLLBACK;
+		SlotMeta_Write(&s_meta);
+		NVIC_SystemReset();
+	}
+
+	/* Slot A geçersiz + yedek yok → ilk programlama modu */
+	Bootloader_Main(NULL);
 	NVIC_SystemReset();
 
-	/* Buraya hic ulasilmamali */
-	while (1) {
-		HAL_IWDG_Refresh(&hiwdg);
-	}
+	while (1) { HAL_IWDG_Refresh(&hiwdg); }
 }
 
 void SystemClock_Config(void) {
